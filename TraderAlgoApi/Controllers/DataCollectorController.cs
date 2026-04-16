@@ -10,7 +10,15 @@ public sealed class DataCollectorController(IDataCollectorService dataCollectorS
     [HttpPost("btc-usd")]
     public async Task<ActionResult<DataCollectionResult>> CollectBtcUsdKlines(CancellationToken cancellationToken)
     {
-        var result = await dataCollectorService.CollectKlinesAsync("BTCUSD", "1h", cancellationToken);
+        return await CollectBtcUsdKlinesByInterval("1h", cancellationToken);
+    }
+
+    [HttpPost("btc-usd/{interval}")]
+    public async Task<ActionResult<DataCollectionResult>> CollectBtcUsdKlinesByInterval(
+        string interval,
+        CancellationToken cancellationToken)
+    {
+        var result = await dataCollectorService.CollectKlinesAsync("BTCUSD", interval, cancellationToken);
 
         return Ok(result);
     }

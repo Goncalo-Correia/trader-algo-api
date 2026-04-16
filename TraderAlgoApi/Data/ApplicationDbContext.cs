@@ -35,15 +35,25 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         {
             entity.HasIndex(interval => interval.Code).IsUnique();
 
-            entity.HasData(new Interval
-            {
-                Id = 1,
-                Code = "1h",
-                DisplayName = "1H",
-                Duration = TimeSpan.FromHours(1),
-                IsActive = true,
-                CreatedAt = new DateTimeOffset(2026, 4, 16, 0, 0, 0, TimeSpan.Zero)
-            });
+            entity.HasData(
+                new Interval
+                {
+                    Id = 1,
+                    Code = "1h",
+                    DisplayName = "1H",
+                    Duration = TimeSpan.FromHours(1),
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 4, 16, 0, 0, 0, TimeSpan.Zero)
+                },
+                new Interval
+                {
+                    Id = 2,
+                    Code = "5m",
+                    DisplayName = "5 Minute",
+                    Duration = TimeSpan.FromMinutes(5),
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 4, 16, 0, 0, 0, TimeSpan.Zero)
+                });
         });
 
         modelBuilder.Entity<KlineData>(entity =>

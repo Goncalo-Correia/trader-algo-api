@@ -5,6 +5,8 @@ public sealed record DataCollectionResult(
     string Interval,
     DateTimeOffset StartTime,
     DateTimeOffset EndTimeExclusive,
+    DateTimeOffset? LatestCandleOpenTime,
     int FetchedCount,
     int InsertedCount,
+    int UpdatedCount,
     int SkippedCount);
