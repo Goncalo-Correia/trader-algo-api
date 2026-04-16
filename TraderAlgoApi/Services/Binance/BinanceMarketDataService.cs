@@ -17,7 +17,7 @@ public sealed class BinanceMarketDataService(HttpClient httpClient) : IBinanceMa
 
         var queryParameters = new List<string>
         {
-            $"symbol={Uri.EscapeDataString(symbol.Trim().ToUpperInvariant())}",
+            $"symbol={Uri.EscapeDataString(NormalizeSymbol(symbol))}",
             $"interval={Uri.EscapeDataString(interval.Trim())}"
         };
 
@@ -53,5 +53,19 @@ public sealed class BinanceMarketDataService(HttpClient httpClient) : IBinanceMa
             .EnumerateArray()
             .Select(BinanceKline.FromJsonArray)
             .ToArray();
+    }
+
+    private static string NormalizeSymbol(string symbol)
+    {
+        var normalizedSymbol = symbol
+            .Trim()
+            .Replace("/", string.Empty, StringComparison.Ordinal)
+            .Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .ToUpperInvariant();
+
+        return normalizedSymbol is "BTCUSD"
+            ? "BTCUSDT"
+            : normalizedSymbol;
     }
 }
