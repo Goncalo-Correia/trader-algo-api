@@ -1,0 +1,6 @@
+@TraderAlgoApi_HostAddress = http://localhost:5111
+
+GET {{TraderAlgoApi_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
