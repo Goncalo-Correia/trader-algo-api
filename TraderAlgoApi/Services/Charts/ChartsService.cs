@@ -2,12 +2,11 @@ namespace TraderAlgoApi.Services.Charts;
 
 public sealed class ChartsService : IChartsService
 {
-    private const string DefaultSymbol = "BTC/USD";
     private const string DefaultInterval = "1h";
 
-    public string NormalizeSymbol(string? symbol)
+    public string NormalizeSymbol(string symbol)
     {
-        return (string.IsNullOrWhiteSpace(symbol) ? DefaultSymbol : symbol)
+        return symbol
             .Trim()
             .Replace("/", string.Empty, StringComparison.Ordinal)
             .Replace("-", string.Empty, StringComparison.Ordinal)

@@ -18,7 +18,14 @@ public sealed class ChartsController(ApplicationDbContext dbContext, IChartsServ
         [FromQuery] string? interval,
         CancellationToken cancellationToken)
     {
-        var normalizedSymbol = chartsService.NormalizeSymbol(symbol);
+        var resolvedSymbol = string.IsNullOrWhiteSpace(symbol)
+            ? await dbContext.Symbols
+                .Where(s => s.IsDefault)
+                .Select(s => s.Code)
+                .FirstOrDefaultAsync(cancellationToken) ?? string.Empty
+            : symbol;
+
+        var normalizedSymbol = chartsService.NormalizeSymbol(resolvedSymbol);
         var normalizedInterval = chartsService.NormalizeInterval(interval);
 
         var candles = await dbContext.KlineData

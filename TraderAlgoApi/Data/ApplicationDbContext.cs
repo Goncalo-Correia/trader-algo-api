@@ -27,6 +27,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
                 QuoteAsset = "USD",
                 DisplayName = "BTC/USD",
                 IsActive = true,
+                IsDefault = true,
                 CreatedAt = new DateTimeOffset(2026, 4, 16, 0, 0, 0, TimeSpan.Zero)
             });
         });
