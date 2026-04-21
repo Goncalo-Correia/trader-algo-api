@@ -28,6 +28,8 @@ public sealed class Symbol
 
     public bool IsActive { get; set; } = true;
 
+    public bool IsDefault { get; set; } = false;
+
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 
     public ICollection<KlineData> Klines { get; set; } = [];

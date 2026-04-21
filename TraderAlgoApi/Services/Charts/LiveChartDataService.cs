@@ -1,13 +1,14 @@
+using Microsoft.EntityFrameworkCore;
+using TraderAlgoApi.Data;
 using TraderAlgoApi.Services.Binance;
 
 namespace TraderAlgoApi.Services.Charts;
 
 public sealed class LiveChartDataService(
     IBinanceMarketDataWebSocketService binanceMarketDataWebSocketService,
-    IChartsService chartsService) : ILiveChartDataService
+    IChartsService chartsService,
+    ApplicationDbContext dbContext) : ILiveChartDataService
 {
-    private const string DefaultSymbol = "BTC/USD";
-
     public async Task StreamCandlesAsync(
         HttpContext context,
         string? symbol = null,
@@ -23,13 +24,25 @@ public sealed class LiveChartDataService(
             return;
         }
 
-        var streamSymbol = string.IsNullOrWhiteSpace(symbol) ? DefaultSymbol : symbol;
+        var streamSymbol = string.IsNullOrWhiteSpace(symbol)
+            ? await dbContext.Symbols
+                .Where(s => s.IsDefault)
+                .Select(s => s.DisplayName)
+                .FirstOrDefaultAsync(cancellationToken) ?? string.Empty
+            : symbol;
+
+        var activeIntervalCodes = await dbContext.Intervals
+            .Where(i => i.IsActive)
+            .Select(i => i.Code)
+            .ToHashSetAsync(cancellationToken);
+
         var streamInterval = chartsService.NormalizeInterval(interval);
 
-        if (!IsSupportedInterval(streamInterval))
+        if (!activeIntervalCodes.Contains(streamInterval))
         {
+            var supported = string.Join(", ", activeIntervalCodes.Order());
             context.Response.StatusCode = StatusCodes.Status400BadRequest;
-            await context.Response.WriteAsync("Interval must be one of: 1m, 5m, 15m, 1h, 4h, 1d.", cancellationToken);
+            await context.Response.WriteAsync($"Interval must be one of: {supported}.", cancellationToken);
             return;
         }
 
@@ -40,7 +53,4 @@ public sealed class LiveChartDataService(
             streamInterval,
             cancellationToken);
     }
-
-    private static bool IsSupportedInterval(string interval) =>
-        interval is "1m" or "5m" or "15m" or "1h" or "4h" or "1d";
 }
