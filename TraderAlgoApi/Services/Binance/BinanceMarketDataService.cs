@@ -1,8 +1,9 @@
 using System.Text.Json;
+using TraderAlgoApi.Services.Charts;
 
 namespace TraderAlgoApi.Services.Binance;
 
-public sealed class BinanceMarketDataService(HttpClient httpClient) : IBinanceMarketDataService
+public sealed class BinanceMarketDataService(HttpClient httpClient, IChartsService chartsService) : IBinanceMarketDataService
 {
     public async Task<IReadOnlyList<BinanceKline>> getKlines(
         string symbol,
@@ -17,7 +18,7 @@ public sealed class BinanceMarketDataService(HttpClient httpClient) : IBinanceMa
 
         var queryParameters = new List<string>
         {
-            $"symbol={Uri.EscapeDataString(NormalizeSymbol(symbol))}",
+            $"symbol={Uri.EscapeDataString(ToBindanceSymbol(chartsService.NormalizeSymbol(symbol)))}",
             $"interval={Uri.EscapeDataString(interval.Trim())}"
         };
 
@@ -55,17 +56,6 @@ public sealed class BinanceMarketDataService(HttpClient httpClient) : IBinanceMa
             .ToArray();
     }
 
-    private static string NormalizeSymbol(string symbol)
-    {
-        var normalizedSymbol = symbol
-            .Trim()
-            .Replace("/", string.Empty, StringComparison.Ordinal)
-            .Replace("-", string.Empty, StringComparison.Ordinal)
-            .Replace("_", string.Empty, StringComparison.Ordinal)
-            .ToUpperInvariant();
-
-        return normalizedSymbol is "BTCUSD"
-            ? "BTCUSDT"
-            : normalizedSymbol;
-    }
+    private static string ToBindanceSymbol(string symbol) =>
+        symbol is "BTCUSD" ? "BTCUSDT" : symbol;
 }
