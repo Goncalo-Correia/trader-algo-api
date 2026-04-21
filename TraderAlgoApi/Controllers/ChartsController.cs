@@ -10,7 +10,6 @@ namespace TraderAlgoApi.Controllers;
 [Route("api/charts")]
 public sealed class ChartsController(ApplicationDbContext dbContext, IChartsService chartsService) : ControllerBase
 {
-    private const string DefaultSymbol = "BTC/USD";
     private const int CandleLimit = 100;
 
     [HttpGet("candles")]
@@ -19,7 +18,7 @@ public sealed class ChartsController(ApplicationDbContext dbContext, IChartsServ
         [FromQuery] string? interval,
         CancellationToken cancellationToken)
     {
-        var normalizedSymbol = chartsService.NormalizeSymbol(string.IsNullOrWhiteSpace(symbol) ? DefaultSymbol : symbol);
+        var normalizedSymbol = chartsService.NormalizeSymbol(symbol);
         var normalizedInterval = chartsService.NormalizeInterval(interval);
 
         var candles = await dbContext.KlineData
