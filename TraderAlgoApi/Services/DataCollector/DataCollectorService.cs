@@ -41,7 +41,7 @@ public sealed class DataCollectorService(
 
         while (true)
         {
-            var klines = await binanceMarketDataService.getKlines(
+            var klines = await binanceMarketDataService.GetKlinesAsync(
                 symbol.Code,
                 interval.Code,
                 cursor,

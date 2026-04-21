@@ -27,14 +27,13 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IDataCollectorService, DataCollectorService>();
 builder.Services.AddScoped<IChartsService, ChartsService>();
 builder.Services.AddScoped<ILiveChartDataService, LiveChartDataService>();
-builder.Services.AddScoped<IBinanceMarketDataWebSocketService, BinanceMarketDataWebSocketService>();
-builder.Services.AddHttpClient<IBinanceMarketDataService, BinanceMarketDataService>(client =>
+builder.Services.AddHttpClient("Binance", client =>
 {
     var baseUrl = builder.Configuration["Binance:BaseUrl"] ?? "https://api.binance.com";
-
     client.BaseAddress = new Uri(baseUrl);
     client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
 });
+builder.Services.AddScoped<IBinanceMarketDataService, BinanceMarketDataService>();
 
 var app = builder.Build();
 

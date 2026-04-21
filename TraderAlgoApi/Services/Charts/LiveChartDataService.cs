@@ -5,7 +5,7 @@ using TraderAlgoApi.Services.Binance;
 namespace TraderAlgoApi.Services.Charts;
 
 public sealed class LiveChartDataService(
-    IBinanceMarketDataWebSocketService binanceMarketDataWebSocketService,
+    IBinanceMarketDataService binanceMarketDataService,
     IChartsService chartsService,
     ApplicationDbContext dbContext) : ILiveChartDataService
 {
@@ -47,7 +47,7 @@ public sealed class LiveChartDataService(
         }
 
         using var clientSocket = await context.WebSockets.AcceptWebSocketAsync();
-        await binanceMarketDataWebSocketService.StreamKlineCandlesAsync(
+        await binanceMarketDataService.StreamKlineCandlesAsync(
             clientSocket,
             streamSymbol,
             streamInterval,
