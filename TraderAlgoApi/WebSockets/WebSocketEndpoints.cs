@@ -24,30 +24,6 @@ internal static class WebSocketEndpoints
             await streamService.StreamKlinesAsync(clientSocket, symbol, interval, context.RequestAborted);
         });
 
-        app.MapGet("/ws/charts/candles", async (
-            HttpContext context,
-            ILiveChartDataService liveChartDataService,
-            CancellationToken cancellationToken) =>
-        {
-            var symbol = context.Request.Query["symbol"].FirstOrDefault();
-            var interval = context.Request.Query["interval"].FirstOrDefault();
-
-            await liveChartDataService.StreamCandlesAsync(context, symbol, interval, cancellationToken);
-        })
-        .ExcludeFromDescription();
-
-        app.MapGet("/ws/charts/candles/{interval}", async (
-            HttpContext context,
-            string interval,
-            ILiveChartDataService liveChartDataService,
-            CancellationToken cancellationToken) =>
-        {
-            var symbol = context.Request.Query["symbol"].FirstOrDefault();
-
-            await liveChartDataService.StreamCandlesAsync(context, symbol, interval, cancellationToken);
-        })
-        .ExcludeFromDescription();
-
         app.MapGet("/ws/charts/{symbol}/candles", async (
             HttpContext context,
             string symbol,
@@ -56,17 +32,6 @@ internal static class WebSocketEndpoints
         {
             var interval = context.Request.Query["interval"].FirstOrDefault();
 
-            await liveChartDataService.StreamCandlesAsync(context, symbol, interval, cancellationToken);
-        })
-        .ExcludeFromDescription();
-
-        app.MapGet("/ws/charts/{symbol}/candles/{interval}", async (
-            HttpContext context,
-            string symbol,
-            string interval,
-            ILiveChartDataService liveChartDataService,
-            CancellationToken cancellationToken) =>
-        {
             await liveChartDataService.StreamCandlesAsync(context, symbol, interval, cancellationToken);
         })
         .ExcludeFromDescription();
