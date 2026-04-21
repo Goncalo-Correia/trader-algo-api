@@ -3,12 +3,11 @@ using TraderAlgoApi.Data;
 using TraderAlgoApi.Services.Binance;
 using TraderAlgoApi.Services.Charts;
 using TraderAlgoApi.Services.DataCollector;
+using TraderAlgoApi.WebSockets;
 
 const string LocalDevelopmentCorsPolicy = "LocalDevelopmentCorsPolicy";
 
 var builder = WebApplication.CreateBuilder(args);
-
-// Add services to the container.
 
 builder.Services.AddControllers();
 builder.Services.AddSwaggerGen();
@@ -38,7 +37,6 @@ builder.Services.AddHttpClient<IBinanceMarketDataService, BinanceMarketDataServi
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 app.UseWebSockets();
 
 if (app.Environment.IsDevelopment())
@@ -54,73 +52,8 @@ else
 }
 
 app.UseCors(LocalDevelopmentCorsPolicy);
-
 app.UseAuthorization();
-
-app.Map("/ws/binance/klines", async context =>
-{
-    if (!context.WebSockets.IsWebSocketRequest)
-    {
-        context.Response.StatusCode = StatusCodes.Status400BadRequest;
-        await context.Response.WriteAsync("Expected a WebSocket request.");
-        return;
-    }
-
-    var symbol = context.Request.Query["symbol"].FirstOrDefault() ?? "BTCUSDT";
-    var interval = context.Request.Query["interval"].FirstOrDefault() ?? "1m";
-    var streamService = context.RequestServices.GetRequiredService<IBinanceMarketDataWebSocketService>();
-
-    using var clientSocket = await context.WebSockets.AcceptWebSocketAsync();
-    await streamService.StreamKlinesAsync(clientSocket, symbol, interval, context.RequestAborted);
-});
-
-app.MapGet("/ws/charts/candles", async (
-    HttpContext context,
-    ILiveChartDataService liveChartDataService,
-    CancellationToken cancellationToken) =>
-{
-    var symbol = context.Request.Query["symbol"].FirstOrDefault();
-    var interval = context.Request.Query["interval"].FirstOrDefault();
-
-    await liveChartDataService.StreamCandlesAsync(context, symbol, interval, cancellationToken);
-})
-.ExcludeFromDescription();
-
-app.MapGet("/ws/charts/candles/{interval}", async (
-    HttpContext context,
-    string interval,
-    ILiveChartDataService liveChartDataService,
-    CancellationToken cancellationToken) =>
-{
-    var symbol = context.Request.Query["symbol"].FirstOrDefault();
-
-    await liveChartDataService.StreamCandlesAsync(context, symbol, interval, cancellationToken);
-})
-.ExcludeFromDescription();
-
-app.MapGet("/ws/charts/{symbol}/candles", async (
-    HttpContext context,
-    string symbol,
-    ILiveChartDataService liveChartDataService,
-    CancellationToken cancellationToken) =>
-{
-    var interval = context.Request.Query["interval"].FirstOrDefault();
-
-    await liveChartDataService.StreamCandlesAsync(context, symbol, interval, cancellationToken);
-})
-.ExcludeFromDescription();
-
-app.MapGet("/ws/charts/{symbol}/candles/{interval}", async (
-    HttpContext context,
-    string symbol,
-    string interval,
-    ILiveChartDataService liveChartDataService,
-    CancellationToken cancellationToken) =>
-{
-    await liveChartDataService.StreamCandlesAsync(context, symbol, interval, cancellationToken);
-})
-.ExcludeFromDescription();
-
+app.MapWebSocketEndpoints();
 app.MapControllers();
 
 app.Run();
