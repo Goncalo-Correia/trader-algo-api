@@ -6,7 +6,6 @@ using TraderAlgoApi.Data;
 using TraderAlgoApi.Dtos.Binance;
 using TraderAlgoApi.Dtos.Charts;
 using TraderAlgoApi.Models;
-using TraderAlgoApi.Services.Charts;
 
 namespace TraderAlgoApi.Services.Binance;
 
@@ -14,7 +13,6 @@ public sealed class BinanceMarketDataService(
     IHttpClientFactory httpClientFactory,
     ApplicationDbContext dbContext,
     IConfiguration configuration,
-    IChartsService chartsService,
     ILogger<BinanceMarketDataService> logger) : IBinanceMarketDataService
 {
     private const string HttpClientName = "Binance";
@@ -34,8 +32,8 @@ public sealed class BinanceMarketDataService(
 
         var queryParameters = new List<string>
         {
-            $"symbol={Uri.EscapeDataString(ToRestSymbol(chartsService.NormalizeSymbol(symbol)))}",
-            $"interval={Uri.EscapeDataString(interval.Trim())}"
+            $"symbol={Uri.EscapeDataString(symbol)}",
+            $"interval={Uri.EscapeDataString(interval)}"
         };
 
         if (startTime is not null)
@@ -174,20 +172,17 @@ public sealed class BinanceMarketDataService(
 
     private async Task UpsertClosedKlineAsync(BinanceKlineStreamData kline, CancellationToken cancellationToken)
     {
-        var symbolCode = ToSymbolCode(kline.Symbol);
-        var intervalCode = chartsService.NormalizeInterval(kline.Interval);
-
         var symbol = await dbContext.Symbols
-            .SingleOrDefaultAsync(s => s.Code == symbolCode, cancellationToken);
+            .SingleOrDefaultAsync(s => s.Code == kline.Symbol, cancellationToken);
         var interval = await dbContext.Intervals
-            .SingleOrDefaultAsync(i => i.Code == intervalCode, cancellationToken);
+            .SingleOrDefaultAsync(i => i.Code == kline.Interval, cancellationToken);
 
         if (symbol is null || interval is null)
         {
             logger.LogWarning(
                 "Skipping closed kline — symbol {SymbolCode} or interval {IntervalCode} not found.",
-                symbolCode,
-                intervalCode);
+                kline.Symbol,
+                kline.Interval);
             return;
         }
 
@@ -232,27 +227,18 @@ public sealed class BinanceMarketDataService(
         await dbContext.SaveChangesAsync(cancellationToken);
         logger.LogInformation(
             "Stored closed kline {SymbolCode} {IntervalCode} {OpenTime}.",
-            symbolCode,
-            intervalCode,
+            kline.Symbol,
+            kline.Interval,
             kline.OpenTime);
     }
 
     private Uri BuildStreamUri(string symbol, string interval)
     {
         var baseUrl = configuration["Binance:WebSocketBaseUrl"] ?? DefaultWebSocketBaseUrl;
-        var streamName = $"{ToStreamSymbol(chartsService.NormalizeSymbol(symbol))}@kline_{chartsService.NormalizeInterval(interval)}";
+        var streamName = $"{symbol.ToLowerInvariant()}@kline_{interval}";
 
         return new Uri($"{baseUrl.TrimEnd('/')}/ws/{streamName}");
     }
-
-    private static string ToRestSymbol(string symbol) =>
-        symbol is "BTCUSD" ? "BTCUSDT" : symbol;
-
-    private static string ToStreamSymbol(string symbol) =>
-        (symbol is "BTCUSD" ? "BTCUSDT" : symbol).ToLowerInvariant();
-
-    private static string ToSymbolCode(string binanceSymbol) =>
-        binanceSymbol.Trim().ToUpperInvariant() is "BTCUSDT" ? "BTCUSD" : binanceSymbol.Trim().ToUpperInvariant();
 
     private static async Task<byte[]?> ReceiveMessageAsync(WebSocket socket, CancellationToken cancellationToken)
     {

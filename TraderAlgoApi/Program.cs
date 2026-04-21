@@ -25,7 +25,6 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("Supabase")));
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IDataCollectorService, DataCollectorService>();
-builder.Services.AddScoped<IChartsService, ChartsService>();
 builder.Services.AddScoped<ILiveChartDataService, LiveChartDataService>();
 builder.Services.AddHttpClient("Binance", client =>
 {

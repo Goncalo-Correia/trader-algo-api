@@ -2,13 +2,12 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
 using TraderAlgoApi.Dtos.Charts;
-using TraderAlgoApi.Services.Charts;
 
 namespace TraderAlgoApi.Controllers;
 
 [ApiController]
 [Route("api/charts")]
-public sealed class ChartsController(ApplicationDbContext dbContext, IChartsService chartsService) : ControllerBase
+public sealed class ChartsController(ApplicationDbContext dbContext) : ControllerBase
 {
     private const int CandleLimit = 100;
 
@@ -18,21 +17,25 @@ public sealed class ChartsController(ApplicationDbContext dbContext, IChartsServ
         [FromQuery] string? interval,
         CancellationToken cancellationToken)
     {
-        var resolvedSymbol = string.IsNullOrWhiteSpace(symbol)
+        var symbolCode = string.IsNullOrWhiteSpace(symbol)
             ? await dbContext.Symbols
                 .Where(s => s.IsDefault)
                 .Select(s => s.Code)
                 .FirstOrDefaultAsync(cancellationToken) ?? string.Empty
             : symbol;
 
-        var normalizedSymbol = chartsService.NormalizeSymbol(resolvedSymbol);
-        var normalizedInterval = chartsService.NormalizeInterval(interval);
+        var intervalCode = string.IsNullOrWhiteSpace(interval)
+            ? await dbContext.Intervals
+                .Where(i => i.IsDefault)
+                .Select(i => i.Code)
+                .FirstOrDefaultAsync(cancellationToken) ?? string.Empty
+            : interval;
 
         var candles = await dbContext.KlineData
             .AsNoTracking()
             .Where(kline =>
-                kline.Symbol.Code == normalizedSymbol &&
-                kline.Interval.Code == normalizedInterval)
+                kline.Symbol.Code == symbolCode &&
+                kline.Interval.Code == intervalCode)
             .OrderByDescending(kline => kline.OpenTime)
             .Take(CandleLimit)
             .OrderBy(kline => kline.OpenTime)

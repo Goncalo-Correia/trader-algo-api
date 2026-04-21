@@ -2,14 +2,12 @@ using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
 using TraderAlgoApi.Models;
 using TraderAlgoApi.Services.Binance;
-using TraderAlgoApi.Services.Charts;
 
 namespace TraderAlgoApi.Services.DataCollector;
 
 public sealed class DataCollectorService(
     ApplicationDbContext dbContext,
-    IBinanceMarketDataService binanceMarketDataService,
-    IChartsService chartsService) : IDataCollectorService
+    IBinanceMarketDataService binanceMarketDataService) : IDataCollectorService
 {
     private const int BinanceMaxKlineLimit = 1000;
 
@@ -22,14 +20,10 @@ public sealed class DataCollectorService(
         ArgumentException.ThrowIfNullOrWhiteSpace(intervalCode);
 
         var symbol = await dbContext.Symbols
-            .SingleAsync(
-                symbol => symbol.Code == symbolCode.Trim().ToUpperInvariant(),
-                cancellationToken);
+            .SingleAsync(s => s.Code == symbolCode, cancellationToken);
 
         var interval = await dbContext.Intervals
-            .SingleAsync(
-                interval => interval.Code == chartsService.NormalizeInterval(intervalCode),
-                cancellationToken);
+            .SingleAsync(i => i.Code == intervalCode, cancellationToken);
 
         var startTime = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
         var fetchedCount = 0;
