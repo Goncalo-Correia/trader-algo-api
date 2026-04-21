@@ -2,15 +2,15 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
 using TraderAlgoApi.Dtos.Charts;
+using TraderAlgoApi.Services.Charts;
 
 namespace TraderAlgoApi.Controllers;
 
 [ApiController]
 [Route("api/charts")]
-public sealed class ChartsController(ApplicationDbContext dbContext) : ControllerBase
+public sealed class ChartsController(ApplicationDbContext dbContext, IChartsService chartsService) : ControllerBase
 {
     private const string DefaultSymbol = "BTC/USD";
-    private const string DefaultInterval = "1h";
     private const int CandleLimit = 100;
 
     [HttpGet("candles")]
@@ -19,16 +19,14 @@ public sealed class ChartsController(ApplicationDbContext dbContext) : Controlle
         [FromQuery] string? interval,
         CancellationToken cancellationToken)
     {
-        var normalizedSymbol = NormalizeSymbol(string.IsNullOrWhiteSpace(symbol) ? DefaultSymbol : symbol);
-        var normalizedInterval = NormalizeInterval(interval);
+        var normalizedSymbol = chartsService.NormalizeSymbol(string.IsNullOrWhiteSpace(symbol) ? DefaultSymbol : symbol);
+        var normalizedInterval = chartsService.NormalizeInterval(interval);
 
-        var query = dbContext.KlineData
+        var candles = await dbContext.KlineData
             .AsNoTracking()
             .Where(kline =>
                 kline.Symbol.Code == normalizedSymbol &&
-                kline.Interval.Code == normalizedInterval);
-
-        var candles = await query
+                kline.Interval.Code == normalizedInterval)
             .OrderByDescending(kline => kline.OpenTime)
             .Take(CandleLimit)
             .OrderBy(kline => kline.OpenTime)
@@ -42,22 +40,5 @@ public sealed class ChartsController(ApplicationDbContext dbContext) : Controlle
             .ToListAsync(cancellationToken);
 
         return Ok(candles);
-    }
-
-    private static string NormalizeSymbol(string symbol)
-    {
-        return symbol
-            .Trim()
-            .Replace("/", string.Empty, StringComparison.Ordinal)
-            .Replace("-", string.Empty, StringComparison.Ordinal)
-            .Replace("_", string.Empty, StringComparison.Ordinal)
-            .ToUpperInvariant();
-    }
-
-    private static string NormalizeInterval(string? interval)
-    {
-        return string.IsNullOrWhiteSpace(interval)
-            ? DefaultInterval
-            : interval.Trim().ToLowerInvariant();
     }
 }
