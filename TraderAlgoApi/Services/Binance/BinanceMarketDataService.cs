@@ -3,7 +3,6 @@ using System.Net.WebSockets;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
-using TraderAlgoApi.Dtos.Binance;
 using TraderAlgoApi.Dtos.Charts;
 using TraderAlgoApi.Models;
 
@@ -62,20 +61,6 @@ public sealed class BinanceMarketDataService(
             .EnumerateArray()
             .Select(BinanceKline.FromJsonArray)
             .ToArray();
-    }
-
-    public async Task StreamKlinesAsync(
-        WebSocket clientSocket,
-        string symbol,
-        string interval,
-        CancellationToken cancellationToken = default)
-    {
-        await StreamKlinesInternalAsync(
-            clientSocket,
-            symbol,
-            interval,
-            kline => (BinanceKlineStreamDto)kline,
-            cancellationToken);
     }
 
     public async Task StreamKlineCandlesAsync(
@@ -316,8 +301,5 @@ public sealed class BinanceMarketDataService(
         decimal TakerBuyQuoteAssetVolume,
         bool IsClosed)
     {
-        public static implicit operator BinanceKlineStreamDto(BinanceKlineStreamData data) =>
-            new(data.Type, data.Symbol, data.Interval, data.EventTime, data.Time,
-                data.Open, data.High, data.Low, data.Close, data.Volume, data.IsClosed);
     }
 }
