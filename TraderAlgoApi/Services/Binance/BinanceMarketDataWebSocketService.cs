@@ -6,13 +6,15 @@ using TraderAlgoApi.Data;
 using TraderAlgoApi.Dtos.Binance;
 using TraderAlgoApi.Dtos.Charts;
 using TraderAlgoApi.Models;
+using TraderAlgoApi.Services.Charts;
 
 namespace TraderAlgoApi.Services.Binance;
 
 public sealed class BinanceMarketDataWebSocketService(
     ApplicationDbContext dbContext,
     IConfiguration configuration,
-    ILogger<BinanceMarketDataWebSocketService> logger) : IBinanceMarketDataWebSocketService
+    ILogger<BinanceMarketDataWebSocketService> logger,
+    IChartsService chartsService) : IBinanceMarketDataWebSocketService
 {
     private const string DefaultWebSocketBaseUrl = "wss://stream.binance.com:443";
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
@@ -134,7 +136,7 @@ public sealed class BinanceMarketDataWebSocketService(
     private Uri BuildKlineStreamUri(string symbol, string interval)
     {
         var baseUrl = configuration["Binance:WebSocketBaseUrl"] ?? DefaultWebSocketBaseUrl;
-        var streamName = $"{NormalizeSymbol(symbol)}@kline_{NormalizeInterval(interval)}";
+        var streamName = $"{NormalizeSymbol(symbol)}@kline_{chartsService.NormalizeInterval(interval)}";
 
         return new Uri($"{baseUrl.TrimEnd('/')}/ws/{streamName}");
     }
@@ -153,17 +155,7 @@ public sealed class BinanceMarketDataWebSocketService(
             : normalizedSymbol.ToLowerInvariant();
     }
 
-    private static string NormalizeInterval(string interval)
-    {
-        var normalizedInterval = interval.Trim().ToLowerInvariant();
 
-        return normalizedInterval switch
-        {
-            "5m" or "5minute" or "5minutes" or "5min" or "5mins" => "5m",
-            "1h" or "1hour" or "1hours" or "1hr" or "1hrs" => "1h",
-            _ => normalizedInterval
-        };
-    }
 
     private static async Task<byte[]?> ReceiveTextMessageAsync(
         WebSocket socket,
@@ -194,7 +186,7 @@ public sealed class BinanceMarketDataWebSocketService(
         CancellationToken cancellationToken)
     {
         var symbolCode = ToDomainSymbolCode(kline.Symbol);
-        var intervalCode = NormalizeInterval(kline.Interval);
+        var intervalCode = chartsService.NormalizeInterval(kline.Interval);
 
         var symbol = await dbContext.Symbols
             .SingleOrDefaultAsync(symbol => symbol.Code == symbolCode, cancellationToken);

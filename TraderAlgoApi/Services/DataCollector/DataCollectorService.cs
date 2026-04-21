@@ -2,12 +2,14 @@ using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
 using TraderAlgoApi.Models;
 using TraderAlgoApi.Services.Binance;
+using TraderAlgoApi.Services.Charts;
 
 namespace TraderAlgoApi.Services.DataCollector;
 
 public sealed class DataCollectorService(
     ApplicationDbContext dbContext,
-    IBinanceMarketDataService binanceMarketDataService) : IDataCollectorService
+    IBinanceMarketDataService binanceMarketDataService,
+    IChartsService chartsService) : IDataCollectorService
 {
     private const int BinanceMaxKlineLimit = 1000;
 
@@ -26,7 +28,7 @@ public sealed class DataCollectorService(
 
         var interval = await dbContext.Intervals
             .SingleAsync(
-                interval => interval.Code == NormalizeInterval(intervalCode),
+                interval => interval.Code == chartsService.NormalizeInterval(intervalCode),
                 cancellationToken);
 
         var startTime = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
@@ -144,18 +146,6 @@ public sealed class DataCollectorService(
             TakerBuyBaseAssetVolume = kline.TakerBuyBaseAssetVolume,
             TakerBuyQuoteAssetVolume = kline.TakerBuyQuoteAssetVolume,
             CreatedAt = DateTimeOffset.UtcNow
-        };
-    }
-
-    private static string NormalizeInterval(string interval)
-    {
-        var normalizedInterval = interval.Trim().ToLowerInvariant();
-
-        return normalizedInterval switch
-        {
-            "5minute" or "5minutes" or "5min" or "5mins" => "5m",
-            "1hour" or "1hours" or "1hr" or "1hrs" => "1h",
-            _ => normalizedInterval
         };
     }
 

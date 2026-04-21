@@ -3,10 +3,10 @@ using TraderAlgoApi.Services.Binance;
 namespace TraderAlgoApi.Services.Charts;
 
 public sealed class LiveChartDataService(
-    IBinanceMarketDataWebSocketService binanceMarketDataWebSocketService) : ILiveChartDataService
+    IBinanceMarketDataWebSocketService binanceMarketDataWebSocketService,
+    IChartsService chartsService) : ILiveChartDataService
 {
     private const string DefaultSymbol = "BTC/USD";
-    private const string DefaultInterval = "1h";
 
     public async Task StreamCandlesAsync(
         HttpContext context,
@@ -24,12 +24,12 @@ public sealed class LiveChartDataService(
         }
 
         var streamSymbol = string.IsNullOrWhiteSpace(symbol) ? DefaultSymbol : symbol;
-        var streamInterval = TryNormalizeInterval(interval);
+        var streamInterval = chartsService.NormalizeInterval(interval);
 
-        if (streamInterval is null)
+        if (!IsSupportedInterval(streamInterval))
         {
             context.Response.StatusCode = StatusCodes.Status400BadRequest;
-            await context.Response.WriteAsync("Interval must be either '5m' or '1h'.", cancellationToken);
+            await context.Response.WriteAsync("Interval must be one of: 1m, 5m, 15m, 1h, 4h, 1d.", cancellationToken);
             return;
         }
 
@@ -41,17 +41,6 @@ public sealed class LiveChartDataService(
             cancellationToken);
     }
 
-    private static string? TryNormalizeInterval(string? interval)
-    {
-        var normalizedInterval = string.IsNullOrWhiteSpace(interval)
-            ? DefaultInterval
-            : interval.Trim().ToLowerInvariant();
-
-        return normalizedInterval switch
-        {
-            "5m" or "5minute" or "5minutes" or "5min" or "5mins" => "5m",
-            "1h" or "1hour" or "1hours" or "1hr" or "1hrs" => "1h",
-            _ => null
-        };
-    }
+    private static bool IsSupportedInterval(string interval) =>
+        interval is "1m" or "5m" or "15m" or "1h" or "4h" or "1d";
 }
