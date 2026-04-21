@@ -86,7 +86,7 @@ public sealed class BinanceMarketDataService(
         WebSocket clientSocket,
         string symbol,
         string interval,
-        Func<BinanceKlineStreamData, TResponse> responseFactory,
+        Func<BinanceStreamKline, TResponse> responseFactory,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
@@ -109,7 +109,7 @@ public sealed class BinanceMarketDataService(
                 if (message is null)
                     break;
 
-                var streamData = BinanceKlineStreamData.FromJson(message);
+                var streamData = BinanceStreamKline.FromJson(message);
                 if (streamData is null)
                     continue;
 
@@ -154,7 +154,7 @@ public sealed class BinanceMarketDataService(
         }
     }
 
-    private async Task UpsertClosedKlineAsync(BinanceKlineStreamData kline, CancellationToken cancellationToken)
+    private async Task UpsertClosedKlineAsync(BinanceStreamKline kline, CancellationToken cancellationToken)
     {
         var symbol = await dbContext.Symbols
             .SingleOrDefaultAsync(s => s.Code == kline.Symbol, cancellationToken);
