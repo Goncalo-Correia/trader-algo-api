@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace TraderAlgoApi.Services.Binance;
 
-internal sealed record BinanceStreamKline(
+internal sealed record BinanceKlineStream(
     string Symbol,
     string Interval,
     long EventTime,
@@ -21,7 +21,7 @@ internal sealed record BinanceStreamKline(
     decimal TakerBuyQuoteAssetVolume,
     bool IsClosed)
 {
-    internal static BinanceStreamKline? FromJson(byte[] message)
+    internal static BinanceKlineStream? FromJson(byte[] message)
     {
         using var document = JsonDocument.Parse(message);
         var root = document.RootElement;
@@ -32,7 +32,7 @@ internal sealed record BinanceStreamKline(
         var openTime = kline.GetProperty("t").GetInt64();
         var closeTime = kline.GetProperty("T").GetInt64();
 
-        return new BinanceStreamKline(
+        return new BinanceKlineStream(
             Symbol: kline.GetProperty("s").GetString() ?? string.Empty,
             Interval: kline.GetProperty("i").GetString() ?? string.Empty,
             EventTime: root.GetProperty("E").GetInt64(),
