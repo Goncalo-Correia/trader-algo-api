@@ -12,12 +12,6 @@ public interface IBinanceMarketDataService
         int? limit = null,
         CancellationToken cancellationToken = default);
 
-    Task StreamKlinesAsync(
-        WebSocket clientSocket,
-        string symbol,
-        string interval,
-        CancellationToken cancellationToken = default);
-
     Task StreamKlineCandlesAsync(
         WebSocket clientSocket,
         string symbol,
