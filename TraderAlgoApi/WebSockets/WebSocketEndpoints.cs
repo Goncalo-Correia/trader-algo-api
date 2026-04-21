@@ -18,7 +18,7 @@ internal static class WebSocketEndpoints
 
             var symbol = context.Request.Query["symbol"].FirstOrDefault() ?? "BTCUSDT";
             var interval = context.Request.Query["interval"].FirstOrDefault() ?? "1m";
-            var streamService = context.RequestServices.GetRequiredService<IBinanceMarketDataWebSocketService>();
+            var streamService = context.RequestServices.GetRequiredService<IBinanceMarketDataService>();
 
             using var clientSocket = await context.WebSockets.AcceptWebSocketAsync();
             await streamService.StreamKlinesAsync(clientSocket, symbol, interval, context.RequestAborted);
