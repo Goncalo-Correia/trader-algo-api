@@ -4,10 +4,12 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
 #nullable disable
 
+#pragma warning disable CA1814 // Prefer jagged arrays over multidimensional
+
 namespace TraderAlgoApi.Migrations
 {
     /// <inheritdoc />
-    public partial class InitialMarketDataSchema : Migration
+    public partial class InitialSchema : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
@@ -88,7 +90,15 @@ namespace TraderAlgoApi.Migrations
             migrationBuilder.InsertData(
                 table: "intervals",
                 columns: new[] { "Id", "Code", "CreatedAt", "DisplayName", "Duration", "IsActive" },
-                values: new object[] { 1, "1h", new DateTimeOffset(new DateTime(2026, 4, 16, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)), "1H", new TimeSpan(0, 1, 0, 0, 0), true });
+                values: new object[,]
+                {
+                    { 1, "1m", new DateTimeOffset(new DateTime(2026, 4, 16, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)), "1 Minute", new TimeSpan(0, 0, 1, 0, 0), true },
+                    { 2, "5m", new DateTimeOffset(new DateTime(2026, 4, 16, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)), "5 Minute", new TimeSpan(0, 0, 5, 0, 0), true },
+                    { 3, "15m", new DateTimeOffset(new DateTime(2026, 4, 16, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)), "15 Minute", new TimeSpan(0, 0, 15, 0, 0), true },
+                    { 4, "1h", new DateTimeOffset(new DateTime(2026, 4, 16, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)), "1H", new TimeSpan(0, 1, 0, 0, 0), true },
+                    { 5, "4h", new DateTimeOffset(new DateTime(2026, 4, 16, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)), "4H", new TimeSpan(0, 4, 0, 0, 0), true },
+                    { 6, "1d", new DateTimeOffset(new DateTime(2026, 4, 16, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)), "1D", new TimeSpan(1, 0, 0, 0, 0), true }
+                });
 
             migrationBuilder.InsertData(
                 table: "symbols",
