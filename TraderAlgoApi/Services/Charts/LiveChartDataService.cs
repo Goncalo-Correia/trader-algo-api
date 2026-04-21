@@ -6,7 +6,6 @@ namespace TraderAlgoApi.Services.Charts;
 
 public sealed class LiveChartDataService(
     IBinanceMarketDataService binanceMarketDataService,
-    IChartsService chartsService,
     ApplicationDbContext dbContext) : ILiveChartDataService
 {
     public async Task StreamCandlesAsync(
@@ -27,22 +26,32 @@ public sealed class LiveChartDataService(
         var streamSymbol = string.IsNullOrWhiteSpace(symbol)
             ? await dbContext.Symbols
                 .Where(s => s.IsDefault)
-                .Select(s => s.DisplayName)
+                .Select(s => s.Code)
                 .FirstOrDefaultAsync(cancellationToken) ?? string.Empty
             : symbol;
 
-        var activeIntervalCodes = await dbContext.Intervals
-            .Where(i => i.IsActive)
-            .Select(i => i.Code)
-            .ToHashSetAsync(cancellationToken);
+        var streamInterval = string.IsNullOrWhiteSpace(interval)
+            ? await dbContext.Intervals
+                .Where(i => i.IsDefault)
+                .Select(i => i.Code)
+                .FirstOrDefaultAsync(cancellationToken) ?? string.Empty
+            : interval;
 
-        var streamInterval = chartsService.NormalizeInterval(interval);
+        var isValidInterval = await dbContext.Intervals
+            .AnyAsync(i => i.IsActive && i.Code == streamInterval, cancellationToken);
 
-        if (!activeIntervalCodes.Contains(streamInterval))
+        if (!isValidInterval)
         {
-            var supported = string.Join(", ", activeIntervalCodes.Order());
+            var validCodes = await dbContext.Intervals
+                .Where(i => i.IsActive)
+                .OrderBy(i => i.Duration)
+                .Select(i => i.Code)
+                .ToListAsync(cancellationToken);
+
             context.Response.StatusCode = StatusCodes.Status400BadRequest;
-            await context.Response.WriteAsync($"Interval must be one of: {supported}.", cancellationToken);
+            await context.Response.WriteAsync(
+                $"Interval must be one of: {string.Join(", ", validCodes)}.",
+                cancellationToken);
             return;
         }
 

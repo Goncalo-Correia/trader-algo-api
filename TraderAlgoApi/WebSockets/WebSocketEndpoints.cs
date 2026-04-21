@@ -1,3 +1,5 @@
+using Microsoft.EntityFrameworkCore;
+using TraderAlgoApi.Data;
 using TraderAlgoApi.Services.Binance;
 using TraderAlgoApi.Services.Charts;
 
@@ -16,8 +18,27 @@ internal static class WebSocketEndpoints
                 return;
             }
 
-            var symbol = context.Request.Query["symbol"].FirstOrDefault() ?? "BTCUSDT";
-            var interval = context.Request.Query["interval"].FirstOrDefault() ?? "1m";
+            var dbContext = context.RequestServices.GetRequiredService<ApplicationDbContext>();
+
+            var symbol = context.Request.Query["symbol"].FirstOrDefault()
+                ?? await dbContext.Symbols
+                    .Where(s => s.IsDefault)
+                    .Select(s => s.Code)
+                    .FirstOrDefaultAsync(context.RequestAborted);
+
+            var interval = context.Request.Query["interval"].FirstOrDefault()
+                ?? await dbContext.Intervals
+                    .Where(i => i.IsDefault)
+                    .Select(i => i.Code)
+                    .FirstOrDefaultAsync(context.RequestAborted);
+
+            if (string.IsNullOrWhiteSpace(symbol) || string.IsNullOrWhiteSpace(interval))
+            {
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await context.Response.WriteAsync("Could not resolve symbol or interval.");
+                return;
+            }
+
             var streamService = context.RequestServices.GetRequiredService<IBinanceMarketDataService>();
 
             using var clientSocket = await context.WebSockets.AcceptWebSocketAsync();
