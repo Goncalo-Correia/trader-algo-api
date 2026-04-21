@@ -60,10 +60,10 @@ namespace TraderAlgoApi.Migrations
                         new
                         {
                             Id = 1,
-                            Code = "1h",
+                            Code = "1m",
                             CreatedAt = new DateTimeOffset(new DateTime(2026, 4, 16, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            DisplayName = "1H",
-                            Duration = new TimeSpan(0, 1, 0, 0, 0),
+                            DisplayName = "1 Minute",
+                            Duration = new TimeSpan(0, 0, 1, 0, 0),
                             IsActive = true
                         },
                         new
@@ -73,6 +73,42 @@ namespace TraderAlgoApi.Migrations
                             CreatedAt = new DateTimeOffset(new DateTime(2026, 4, 16, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
                             DisplayName = "5 Minute",
                             Duration = new TimeSpan(0, 0, 5, 0, 0),
+                            IsActive = true
+                        },
+                        new
+                        {
+                            Id = 3,
+                            Code = "15m",
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 4, 16, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                            DisplayName = "15 Minute",
+                            Duration = new TimeSpan(0, 0, 15, 0, 0),
+                            IsActive = true
+                        },
+                        new
+                        {
+                            Id = 4,
+                            Code = "1h",
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 4, 16, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                            DisplayName = "1H",
+                            Duration = new TimeSpan(0, 1, 0, 0, 0),
+                            IsActive = true
+                        },
+                        new
+                        {
+                            Id = 5,
+                            Code = "4h",
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 4, 16, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                            DisplayName = "4H",
+                            Duration = new TimeSpan(0, 4, 0, 0, 0),
+                            IsActive = true
+                        },
+                        new
+                        {
+                            Id = 6,
+                            Code = "1d",
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 4, 16, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                            DisplayName = "1D",
+                            Duration = new TimeSpan(1, 0, 0, 0, 0),
                             IsActive = true
                         });
                 });
