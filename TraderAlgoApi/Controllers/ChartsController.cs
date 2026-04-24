@@ -9,13 +9,14 @@ namespace TraderAlgoApi.Controllers;
 [Route("api/charts")]
 public sealed class ChartsController(ApplicationDbContext dbContext) : ControllerBase
 {
-    private const int CandleLimit = 100;
+    private const int DefaultLookback = 100;
 
     [HttpGet("candles")]
     public async Task<ActionResult<IReadOnlyList<CandleResponseDto>>> GetCandles(
         [FromQuery] string? symbol,
         [FromQuery] string? interval,
-        CancellationToken cancellationToken)
+        [FromQuery] int lookback = DefaultLookback,
+        CancellationToken cancellationToken = default)
     {
         var symbolCode = string.IsNullOrWhiteSpace(symbol)
             ? await dbContext.Symbols
@@ -37,7 +38,7 @@ public sealed class ChartsController(ApplicationDbContext dbContext) : Controlle
                 kline.Symbol.Code == symbolCode &&
                 kline.Interval.Code == intervalCode)
             .OrderByDescending(kline => kline.OpenTime)
-            .Take(CandleLimit)
+            .Take(lookback)
             .OrderBy(kline => kline.OpenTime)
             .Select(kline => new CandleResponseDto(
                 kline.OpenTime.ToUnixTimeSeconds(),
