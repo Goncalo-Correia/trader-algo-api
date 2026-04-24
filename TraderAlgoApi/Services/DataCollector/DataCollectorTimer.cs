@@ -8,6 +8,8 @@ public sealed class DataCollectorTimer(
     TimeProvider timeProvider,
     ILogger<DataCollectorTimer> logger) : BackgroundService
 {
+    private static readonly DateTimeOffset DataStartDate = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -51,6 +53,7 @@ public sealed class DataCollectorTimer(
                     var result = await dataCollectorService.CollectKlinesAsync(
                         symbol.Code,
                         interval.Code,
+                        DataStartDate,
                         cancellationToken);
 
                     logger.LogInformation(

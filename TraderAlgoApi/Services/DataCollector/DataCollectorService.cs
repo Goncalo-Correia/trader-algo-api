@@ -14,6 +14,7 @@ public sealed class DataCollectorService(
     public async Task<DataCollectionResult> CollectKlinesAsync(
         string symbolCode,
         string intervalCode,
+        DateTimeOffset startTime,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolCode);
@@ -25,7 +26,6 @@ public sealed class DataCollectorService(
         var interval = await dbContext.Intervals
             .SingleAsync(i => i.Code == intervalCode, cancellationToken);
 
-        var startTime = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
         var fetchedCount = 0;
         var insertedCount = 0;
         var updatedCount = 0;
