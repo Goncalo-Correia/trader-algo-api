@@ -3,6 +3,7 @@ using TraderAlgoApi.Data;
 using TraderAlgoApi.Services.Binance;
 using TraderAlgoApi.Services.Charts;
 using TraderAlgoApi.Services.DataCollector;
+using TraderAlgoApi.Services.Kronos;
 using TraderAlgoApi.WebSockets;
 
 const string LocalDevelopmentCorsPolicy = "LocalDevelopmentCorsPolicy";
@@ -34,6 +35,13 @@ builder.Services.AddHttpClient("Binance", client =>
     client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
 });
 builder.Services.AddScoped<IBinanceMarketDataService, BinanceMarketDataService>();
+builder.Services.AddHttpClient("Kronos", client =>
+{
+    var baseUrl = builder.Configuration["Kronos:BaseUrl"] ?? "http://localhost:8001";
+    client.BaseAddress = new Uri(baseUrl);
+    client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+});
+builder.Services.AddScoped<IKronosConnectorService, KronosConnectorService>();
 
 var app = builder.Build();
 
