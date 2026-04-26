@@ -35,13 +35,15 @@ builder.Services.AddHttpClient("Binance", client =>
     client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
 });
 builder.Services.AddScoped<IBinanceMarketDataService, BinanceMarketDataService>();
+builder.Services.AddHostedService<BinanceKlineStreamingService>();
 builder.Services.AddHttpClient("Kronos", client =>
 {
-    var baseUrl = builder.Configuration["Kronos:BaseUrl"] ?? "http://localhost:8001";
+    var baseUrl = builder.Configuration["Kronos:BaseUrl"] ?? "http://localhost:8765 ";
     client.BaseAddress = new Uri(baseUrl);
     client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
 });
 builder.Services.AddScoped<IKronosConnectorService, KronosConnectorService>();
+builder.Services.AddScoped<IKronosPredictService, KronosPredictService>();
 
 var app = builder.Build();
 

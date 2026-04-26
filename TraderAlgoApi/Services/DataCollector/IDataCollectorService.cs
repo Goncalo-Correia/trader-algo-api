@@ -7,4 +7,10 @@ public interface IDataCollectorService
         string intervalCode,
         DateTimeOffset startTime,
         CancellationToken cancellationToken = default);
+
+    Task<DataCollectionResult> SyncGapsAsync(
+        string symbolCode,
+        string intervalCode,
+        DateTimeOffset fallbackStartTime,
+        CancellationToken cancellationToken = default);
 }

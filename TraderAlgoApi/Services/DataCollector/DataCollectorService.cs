@@ -122,6 +122,106 @@ public sealed class DataCollectorService(
             skippedCount);
     }
 
+    public async Task<DataCollectionResult> SyncGapsAsync(
+        string symbolCode,
+        string intervalCode,
+        DateTimeOffset fallbackStartTime,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(symbolCode);
+        ArgumentException.ThrowIfNullOrWhiteSpace(intervalCode);
+
+        var symbol = await dbContext.Symbols.SingleAsync(s => s.Code == symbolCode, cancellationToken);
+        var interval = await dbContext.Intervals.SingleAsync(i => i.Code == intervalCode, cancellationToken);
+
+        var openTimes = await dbContext.KlineData
+            .AsNoTracking()
+            .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id)
+            .OrderBy(k => k.OpenTime)
+            .Select(k => k.OpenTime)
+            .ToListAsync(cancellationToken);
+
+        if (openTimes.Count == 0)
+            return await CollectKlinesAsync(symbolCode, intervalCode, fallbackStartTime, cancellationToken);
+
+        var gaps = new List<(DateTimeOffset Start, DateTimeOffset? End)>();
+
+        for (var i = 0; i < openTimes.Count - 1; i++)
+        {
+            var expected = openTimes[i].Add(interval.Duration);
+            if (openTimes[i + 1] > expected)
+                gaps.Add((expected, openTimes[i + 1]));
+        }
+
+        var trailingStart = openTimes[^1].Add(interval.Duration);
+        if (trailingStart < DateTimeOffset.UtcNow)
+            gaps.Add((trailingStart, null));
+
+        if (gaps.Count == 0)
+        {
+            return new DataCollectionResult(
+                symbol.Code, interval.Code,
+                openTimes[0], openTimes[^1].Add(interval.Duration),
+                openTimes[^1],
+                FetchedCount: 0, InsertedCount: 0, UpdatedCount: 0, SkippedCount: 0);
+        }
+
+        var fetchedCount = 0;
+        var insertedCount = 0;
+        DateTimeOffset? latestCandleOpenTime = openTimes[^1];
+
+        foreach (var (gapStart, gapEnd) in gaps)
+        {
+            var cursor = gapStart;
+
+            while (true)
+            {
+                var klines = await binanceMarketDataService.GetKlinesAsync(
+                    symbol.Code, interval.Code,
+                    cursor, gapEnd,
+                    BinanceMaxKlineLimit, cancellationToken);
+
+                var eligible = klines
+                    .Where(k => k.OpenTime >= gapStart && (gapEnd is null || k.OpenTime < gapEnd))
+                    .OrderBy(k => k.OpenTime)
+                    .ToArray();
+
+                if (eligible.Length == 0)
+                    break;
+
+                fetchedCount += eligible.Length;
+
+                var toInsert = eligible
+                    .Select(k => ToKlineData(k, symbol.Id, interval.Id))
+                    .ToArray();
+
+                dbContext.KlineData.AddRange(toInsert);
+                await dbContext.SaveChangesAsync(cancellationToken);
+                insertedCount += toInsert.Length;
+
+                if (eligible[^1].OpenTime > latestCandleOpenTime)
+                    latestCandleOpenTime = eligible[^1].OpenTime;
+
+                if (eligible.Length < BinanceMaxKlineLimit)
+                    break;
+
+                var nextCursor = eligible[^1].OpenTime.Add(interval.Duration);
+                if (gapEnd is not null && nextCursor >= gapEnd)
+                    break;
+                if (nextCursor <= cursor)
+                    break;
+
+                cursor = nextCursor;
+            }
+        }
+
+        return new DataCollectionResult(
+            symbol.Code, interval.Code,
+            openTimes[0], latestCandleOpenTime!.Value.Add(interval.Duration),
+            latestCandleOpenTime,
+            fetchedCount, insertedCount, UpdatedCount: 0, SkippedCount: 0);
+    }
+
     private static KlineData ToKlineData(BinanceKline kline, int symbolId, int intervalId)
     {
         return new KlineData

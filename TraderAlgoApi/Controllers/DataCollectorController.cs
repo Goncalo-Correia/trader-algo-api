@@ -24,6 +24,37 @@ public sealed class DataCollectorController(
         return Ok(result);
     }
 
+    [HttpPost("partial-sync")]
+    public async Task<ActionResult<IReadOnlyList<DataCollectionResult>>> PartialSync(CancellationToken cancellationToken)
+    {
+        var symbols = await dbContext.Symbols
+            .AsNoTracking()
+            .Where(s => s.IsActive)
+            .OrderBy(s => s.Code)
+            .ToListAsync(cancellationToken);
+
+        var intervals = await dbContext.Intervals
+            .AsNoTracking()
+            .Where(i => i.IsActive)
+            .OrderBy(i => i.Duration)
+            .ToListAsync(cancellationToken);
+
+        var results = new List<DataCollectionResult>();
+
+        foreach (var symbol in symbols)
+        {
+            foreach (var interval in intervals)
+            {
+                var result = await dataCollectorService.SyncGapsAsync(
+                    symbol.Code, interval.Code, DataStartDate, cancellationToken);
+
+                results.Add(result);
+            }
+        }
+
+        return Ok(results);
+    }
+
     [HttpPost("full-sync")]
     public async Task<ActionResult<IReadOnlyList<DataCollectionResult>>> FullSync(CancellationToken cancellationToken)
     {

@@ -1,15 +1,11 @@
 using System.Net.WebSockets;
 using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
-using TraderAlgoApi.Data;
 using TraderAlgoApi.Dtos.Charts;
-using TraderAlgoApi.Models;
 
 namespace TraderAlgoApi.Services.Binance;
 
 public sealed class BinanceMarketDataService(
     IHttpClientFactory httpClientFactory,
-    ApplicationDbContext dbContext,
     IConfiguration configuration,
     ILogger<BinanceMarketDataService> logger) : IBinanceMarketDataService
 {
@@ -113,23 +109,6 @@ public sealed class BinanceMarketDataService(
                 if (streamData is null)
                     continue;
 
-                if (streamData.IsClosed)
-                {
-                    try
-                    {
-                        await UpsertClosedKlineAsync(streamData, cancellationToken);
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    {
-                        logger.LogError(
-                            ex,
-                            "Failed to store closed Binance kline {Symbol} {Interval} {OpenTime}.",
-                            streamData.Symbol,
-                            streamData.Interval,
-                            streamData.OpenTime);
-                    }
-                }
-
                 var payload = JsonSerializer.SerializeToUtf8Bytes(responseFactory(streamData), SerializerOptions);
                 await clientSocket.SendAsync(payload, WebSocketMessageType.Text, endOfMessage: true, cancellationToken);
             }
@@ -152,68 +131,6 @@ public sealed class BinanceMarketDataService(
                     CancellationToken.None);
             }
         }
-    }
-
-    private async Task UpsertClosedKlineAsync(BinanceKlineStream kline, CancellationToken cancellationToken)
-    {
-        var symbol = await dbContext.Symbols
-            .SingleOrDefaultAsync(s => s.Code == kline.Symbol, cancellationToken);
-        var interval = await dbContext.Intervals
-            .SingleOrDefaultAsync(i => i.Code == kline.Interval, cancellationToken);
-
-        if (symbol is null || interval is null)
-        {
-            logger.LogWarning(
-                "Skipping closed kline — symbol {SymbolCode} or interval {IntervalCode} not found.",
-                kline.Symbol,
-                kline.Interval);
-            return;
-        }
-
-        var existing = await dbContext.KlineData.SingleOrDefaultAsync(
-            k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id && k.OpenTime == kline.OpenTime,
-            cancellationToken);
-
-        if (existing is null)
-        {
-            dbContext.KlineData.Add(new KlineData
-            {
-                SymbolId = symbol.Id,
-                IntervalId = interval.Id,
-                OpenTime = kline.OpenTime,
-                CloseTime = kline.CloseTime,
-                Open = kline.Open,
-                High = kline.High,
-                Low = kline.Low,
-                Close = kline.Close,
-                Volume = kline.Volume,
-                QuoteAssetVolume = kline.QuoteAssetVolume,
-                NumberOfTrades = kline.NumberOfTrades,
-                TakerBuyBaseAssetVolume = kline.TakerBuyBaseAssetVolume,
-                TakerBuyQuoteAssetVolume = kline.TakerBuyQuoteAssetVolume,
-                CreatedAt = DateTimeOffset.UtcNow
-            });
-        }
-        else
-        {
-            existing.CloseTime = kline.CloseTime;
-            existing.Open = kline.Open;
-            existing.High = kline.High;
-            existing.Low = kline.Low;
-            existing.Close = kline.Close;
-            existing.Volume = kline.Volume;
-            existing.QuoteAssetVolume = kline.QuoteAssetVolume;
-            existing.NumberOfTrades = kline.NumberOfTrades;
-            existing.TakerBuyBaseAssetVolume = kline.TakerBuyBaseAssetVolume;
-            existing.TakerBuyQuoteAssetVolume = kline.TakerBuyQuoteAssetVolume;
-        }
-
-        await dbContext.SaveChangesAsync(cancellationToken);
-        logger.LogInformation(
-            "Stored closed kline {SymbolCode} {IntervalCode} {OpenTime}.",
-            kline.Symbol,
-            kline.Interval,
-            kline.OpenTime);
     }
 
     private Uri BuildStreamUri(string symbol, string interval)
