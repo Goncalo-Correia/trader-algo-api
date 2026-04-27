@@ -74,7 +74,9 @@ public sealed class BinanceMarketDataService(
                 kline.High,
                 kline.Low,
                 kline.Close,
-                kline.Volume),
+                kline.Volume,
+                kline.TakerBuyBaseAssetVolume,
+                kline.Volume - kline.TakerBuyBaseAssetVolume),
             cancellationToken);
     }
 

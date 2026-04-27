@@ -4,6 +4,7 @@ using TraderAlgoApi.Services.Binance;
 using TraderAlgoApi.Services.Charts;
 using TraderAlgoApi.Services.DataCollector;
 using TraderAlgoApi.Services.Kronos;
+using TraderAlgoApi.Services.Session;
 using TraderAlgoApi.WebSockets;
 
 const string LocalDevelopmentCorsPolicy = "LocalDevelopmentCorsPolicy";
@@ -25,6 +26,7 @@ builder.Services.AddCors(options =>
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("Supabase")));
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<NyseSessionService>();
 builder.Services.AddScoped<IDataCollectorService, DataCollectorService>();
 builder.Services.AddHostedService<DataCollectorTimer>();
 builder.Services.AddScoped<ILiveChartDataService, LiveChartDataService>();

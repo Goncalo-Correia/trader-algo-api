@@ -47,7 +47,9 @@ public sealed class ChartsController(ApplicationDbContext dbContext) : Controlle
                 kline.High,
                 kline.Low,
                 kline.Close,
-                kline.Volume))
+                kline.Volume,
+                kline.TakerBuyBaseAssetVolume,
+                kline.Volume - kline.TakerBuyBaseAssetVolume))
             .ToListAsync(cancellationToken);
 
         return Ok(candles);

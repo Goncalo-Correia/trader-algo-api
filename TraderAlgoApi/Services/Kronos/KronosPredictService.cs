@@ -57,7 +57,9 @@ public sealed class KronosPredictService(
                 c.High,
                 c.Low,
                 c.Close,
-                c.Volume))
+                c.Volume,
+                BuyVolume: 0,
+                SellVolume: 0))
             .ToList();
     }
 }
