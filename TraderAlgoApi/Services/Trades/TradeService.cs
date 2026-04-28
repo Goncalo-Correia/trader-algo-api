@@ -22,7 +22,7 @@ public sealed class TradeService(
 
         var hasOpen = await dbContext.Trades.AnyAsync(
             t => t.SymbolCode == request.SymbolCode &&
-                 (t.Status == TradeStatus.Pending || t.Status == TradeStatus.Active),
+                 (t.StatusId == (int)TradeStatus.Pending || t.StatusId == (int)TradeStatus.Active),
             cancellationToken);
 
         if (hasOpen)
@@ -131,7 +131,7 @@ public sealed class TradeService(
         var trades = await dbContext.Trades
             .AsNoTracking()
             .Where(t => t.SymbolCode == symbol &&
-                        (t.Status == TradeStatus.Active || t.Status == TradeStatus.Pending))
+                        (t.StatusId == (int)TradeStatus.Active || t.StatusId == (int)TradeStatus.Pending))
             .OrderByDescending(t => t.CreatedAt)
             .ToListAsync(cancellationToken);
 
@@ -145,7 +145,7 @@ public sealed class TradeService(
         var trades = await dbContext.Trades
             .AsNoTracking()
             .Where(t => t.SymbolCode == symbol &&
-                        (t.Status == TradeStatus.Closed || t.Status == TradeStatus.Cancelled))
+                        (t.StatusId == (int)TradeStatus.Closed || t.StatusId == (int)TradeStatus.Cancelled))
             .OrderByDescending(t => t.ClosedAt)
             .ToListAsync(cancellationToken);
 
@@ -159,7 +159,7 @@ public sealed class TradeService(
     {
         var trades = await dbContext.Trades
             .Where(t => t.SymbolCode == symbol &&
-                        (t.Status == TradeStatus.Pending || t.Status == TradeStatus.Active))
+                        (t.StatusId == (int)TradeStatus.Pending || t.StatusId == (int)TradeStatus.Active))
             .ToListAsync(cancellationToken);
 
         if (trades.Count == 0)

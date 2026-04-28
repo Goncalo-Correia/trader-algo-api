@@ -2,6 +2,6 @@ namespace TraderAlgoApi.Models.Enums;
 
 public enum TradeSide
 {
-    Buy,
-    Sell
+    Buy  = 1,
+    Sell = 2
 }

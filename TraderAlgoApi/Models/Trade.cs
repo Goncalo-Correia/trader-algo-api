@@ -18,9 +18,9 @@ public sealed class Trade
     [MaxLength(10)]
     public string? IntervalCode { get; set; }
 
-    public TradeSide Side { get; set; }
+    public int SideId { get; set; }
 
-    public TradeOrderType OrderType { get; set; }
+    public int OrderTypeId { get; set; }
 
     [Precision(28, 10)]
     public decimal Quantity { get; set; }
@@ -39,7 +39,7 @@ public sealed class Trade
     [Precision(28, 10)]
     public decimal? TakeProfit { get; set; }
 
-    public TradeStatus Status { get; set; }
+    public int StatusId { get; set; }
 
     public DateTimeOffset CreatedAt { get; set; }
 
@@ -50,5 +50,38 @@ public sealed class Trade
     [Precision(28, 10)]
     public decimal? ClosedPrice { get; set; }
 
-    public TradeCloseReason? CloseReason { get; set; }
+    public int? CloseReasonId { get; set; }
+
+    // -------------------------------------------------------------------------
+    // Computed properties — not persisted, provide typed enum access throughout
+    // the business logic layer without leaking raw int IDs.
+    // -------------------------------------------------------------------------
+
+    [NotMapped]
+    public TradeSide Side
+    {
+        get => (TradeSide)SideId;
+        set => SideId = (int)value;
+    }
+
+    [NotMapped]
+    public TradeOrderType OrderType
+    {
+        get => (TradeOrderType)OrderTypeId;
+        set => OrderTypeId = (int)value;
+    }
+
+    [NotMapped]
+    public TradeStatus Status
+    {
+        get => (TradeStatus)StatusId;
+        set => StatusId = (int)value;
+    }
+
+    [NotMapped]
+    public TradeCloseReason? CloseReason
+    {
+        get => CloseReasonId is int id ? (TradeCloseReason)id : null;
+        set => CloseReasonId = value is TradeCloseReason reason ? (int)reason : null;
+    }
 }

@@ -2,6 +2,6 @@ namespace TraderAlgoApi.Models.Enums;
 
 public enum TradeOrderType
 {
-    Market,
-    Limit
+    Market = 1,
+    Limit  = 2
 }

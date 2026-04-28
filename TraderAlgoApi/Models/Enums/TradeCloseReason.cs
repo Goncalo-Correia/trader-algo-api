@@ -2,7 +2,7 @@ namespace TraderAlgoApi.Models.Enums;
 
 public enum TradeCloseReason
 {
-    Manual,
-    StopLoss,
-    TakeProfit
+    Manual     = 1,
+    StopLoss   = 2,
+    TakeProfit = 3
 }
