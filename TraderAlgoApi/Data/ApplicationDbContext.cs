@@ -101,6 +101,16 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         // -------------------------------------------------------------------
         modelBuilder.Entity<Trade>(entity =>
         {
+            entity.HasOne(t => t.Symbol)
+                .WithMany()
+                .HasForeignKey(t => t.SymbolId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(t => t.Interval)
+                .WithMany()
+                .HasForeignKey(t => t.IntervalId)
+                .OnDelete(DeleteBehavior.Restrict);
+
             entity.HasOne(t => t.Side)
                 .WithMany()
                 .HasForeignKey(t => t.SideId)
@@ -121,7 +131,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
                 .HasForeignKey(t => t.CloseReasonId)
                 .OnDelete(DeleteBehavior.Restrict);
 
-            entity.HasIndex(t => new { t.SymbolCode, t.StatusId });
+            entity.HasIndex(t => new { t.SymbolId, t.StatusId });
         });
     }
 }

@@ -20,8 +20,21 @@ public sealed class TradeService(
         if (request.OrderType == TradeOrderType.Limit && request.LimitPrice is null)
             throw new ArgumentException("LimitPrice is required for limit orders.");
 
+        var symbol = await dbContext.Symbols
+            .FirstOrDefaultAsync(s => s.Code == request.SymbolCode, cancellationToken)
+            ?? throw new ArgumentException($"Symbol '{request.SymbolCode}' not found.");
+
+        int? intervalId = null;
+        if (request.IntervalCode is not null)
+        {
+            var interval = await dbContext.Intervals
+                .FirstOrDefaultAsync(i => i.Code == request.IntervalCode, cancellationToken)
+                ?? throw new ArgumentException($"Interval '{request.IntervalCode}' not found.");
+            intervalId = interval.Id;
+        }
+
         var hasOpen = await dbContext.Trades.AnyAsync(
-            t => t.SymbolCode == request.SymbolCode &&
+            t => t.SymbolId == symbol.Id &&
                  (t.StatusId == (int)TradeStatus.Pending || t.StatusId == (int)TradeStatus.Active),
             cancellationToken);
 
@@ -38,8 +51,8 @@ public sealed class TradeService(
 
             trade = new Trade
             {
-                SymbolCode     = request.SymbolCode,
-                IntervalCode   = request.IntervalCode,
+                SymbolId       = symbol.Id,
+                IntervalId     = intervalId,
                 SideId         = (int)request.Side,
                 OrderTypeId    = (int)TradeOrderType.Market,
                 Quantity       = request.Quantity,
@@ -56,8 +69,8 @@ public sealed class TradeService(
         {
             trade = new Trade
             {
-                SymbolCode     = request.SymbolCode,
-                IntervalCode   = request.IntervalCode,
+                SymbolId       = symbol.Id,
+                IntervalId     = intervalId,
                 SideId         = (int)request.Side,
                 OrderTypeId    = (int)TradeOrderType.Limit,
                 Quantity       = request.Quantity,
@@ -73,23 +86,26 @@ public sealed class TradeService(
         dbContext.Trades.Add(trade);
         await dbContext.SaveChangesAsync(cancellationToken);
 
+        // EF's change tracker has symbol (and interval if set) in scope, so
+        // relationship fixup populates the navigation properties after save.
         logger.LogInformation(
             "Trade {Id} created: {Symbol} {Side} {OrderType} qty={Quantity}",
-            trade.Id, trade.SymbolCode, (TradeSide)trade.SideId, (TradeOrderType)trade.OrderTypeId, trade.Quantity);
+            trade.Id, symbol.Code, (TradeSide)trade.SideId, (TradeOrderType)trade.OrderTypeId, trade.Quantity);
 
         return ToDto(trade);
     }
 
     public async Task<TradeResponseDto> StopAsync(long id, CancellationToken cancellationToken = default)
     {
-        var trade = await dbContext.Trades.FindAsync([id], cancellationToken)
+        var trade = await TradeWithNavigations()
+            .FirstOrDefaultAsync(t => t.Id == id, cancellationToken)
             ?? throw new KeyNotFoundException($"Trade {id} not found.");
 
         if (trade.StatusId != (int)TradeStatus.Active)
             throw new InvalidOperationException(
                 $"Trade {id} cannot be stopped: current status is {(TradeStatus)trade.StatusId}.");
 
-        var price = await ResolveCurrentPriceAsync(trade.SymbolCode, cancellationToken);
+        var price = await ResolveCurrentPriceAsync(trade.Symbol.Code, cancellationToken);
         var now   = timeProvider.GetUtcNow();
 
         trade.StatusId      = (int)TradeStatus.Closed;
@@ -109,7 +125,8 @@ public sealed class TradeService(
         UpdateTradeRequestDto request,
         CancellationToken cancellationToken = default)
     {
-        var trade = await dbContext.Trades.FindAsync([id], cancellationToken)
+        var trade = await TradeWithNavigations()
+            .FirstOrDefaultAsync(t => t.Id == id, cancellationToken)
             ?? throw new KeyNotFoundException($"Trade {id} not found.");
 
         if (trade.StatusId != (int)TradeStatus.Active && trade.StatusId != (int)TradeStatus.Pending)
@@ -128,9 +145,9 @@ public sealed class TradeService(
         string symbol,
         CancellationToken cancellationToken = default)
     {
-        var trades = await dbContext.Trades
+        var trades = await TradeWithNavigations()
             .AsNoTracking()
-            .Where(t => t.SymbolCode == symbol &&
+            .Where(t => t.Symbol.Code == symbol &&
                         (t.StatusId == (int)TradeStatus.Active || t.StatusId == (int)TradeStatus.Pending))
             .OrderByDescending(t => t.CreatedAt)
             .ToListAsync(cancellationToken);
@@ -142,9 +159,9 @@ public sealed class TradeService(
         string symbol,
         CancellationToken cancellationToken = default)
     {
-        var trades = await dbContext.Trades
+        var trades = await TradeWithNavigations()
             .AsNoTracking()
-            .Where(t => t.SymbolCode == symbol &&
+            .Where(t => t.Symbol.Code == symbol &&
                         (t.StatusId == (int)TradeStatus.Closed || t.StatusId == (int)TradeStatus.Cancelled))
             .OrderByDescending(t => t.ClosedAt)
             .ToListAsync(cancellationToken);
@@ -157,8 +174,9 @@ public sealed class TradeService(
         decimal price,
         CancellationToken cancellationToken = default)
     {
+        // No Include needed — ToDto is not called here.
         var trades = await dbContext.Trades
-            .Where(t => t.SymbolCode == symbol &&
+            .Where(t => t.Symbol.Code == symbol &&
                         (t.StatusId == (int)TradeStatus.Pending || t.StatusId == (int)TradeStatus.Active))
             .ToListAsync(cancellationToken);
 
@@ -182,6 +200,12 @@ public sealed class TradeService(
     // -------------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------------
+
+    /// <summary>Base query that includes all navigation properties needed by ToDto.</summary>
+    private IQueryable<Trade> TradeWithNavigations() =>
+        dbContext.Trades
+            .Include(t => t.Symbol)
+            .Include(t => t.Interval);
 
     private static bool TryFillLimit(Trade trade, decimal price, DateTimeOffset now)
     {
@@ -251,8 +275,8 @@ public sealed class TradeService(
 
     private static TradeResponseDto ToDto(Trade t) => new(
         Id:             t.Id,
-        SymbolCode:     t.SymbolCode,
-        IntervalCode:   t.IntervalCode,
+        SymbolCode:     t.Symbol.Code,
+        IntervalCode:   t.Interval?.Code,
         Side:           (TradeSide)t.SideId,
         OrderType:      (TradeOrderType)t.OrderTypeId,
         Quantity:       t.Quantity,

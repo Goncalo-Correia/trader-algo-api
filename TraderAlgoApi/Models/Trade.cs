@@ -12,11 +12,16 @@ public sealed class Trade
     [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
     public long Id { get; set; }
 
-    [Required, MaxLength(20)]
-    public string SymbolCode { get; set; } = string.Empty;
+    [Required]
+    public int SymbolId { get; set; }
 
-    [MaxLength(10)]
-    public string? IntervalCode { get; set; }
+    [ForeignKey(nameof(SymbolId))]
+    public Symbol Symbol { get; set; } = null!;
+
+    public int? IntervalId { get; set; }
+
+    [ForeignKey(nameof(IntervalId))]
+    public Interval? Interval { get; set; }
 
     public int SideId { get; set; }
 
