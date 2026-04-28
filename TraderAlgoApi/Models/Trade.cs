@@ -1,7 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using Microsoft.EntityFrameworkCore;
-using TraderAlgoApi.Models.Enums;
 
 namespace TraderAlgoApi.Models;
 
@@ -51,37 +50,4 @@ public sealed class Trade
     public decimal? ClosedPrice { get; set; }
 
     public int? CloseReasonId { get; set; }
-
-    // -------------------------------------------------------------------------
-    // Computed properties — not persisted, provide typed enum access throughout
-    // the business logic layer without leaking raw int IDs.
-    // -------------------------------------------------------------------------
-
-    [NotMapped]
-    public TradeSide Side
-    {
-        get => (TradeSide)SideId;
-        set => SideId = (int)value;
-    }
-
-    [NotMapped]
-    public TradeOrderType OrderType
-    {
-        get => (TradeOrderType)OrderTypeId;
-        set => OrderTypeId = (int)value;
-    }
-
-    [NotMapped]
-    public TradeStatus Status
-    {
-        get => (TradeStatus)StatusId;
-        set => StatusId = (int)value;
-    }
-
-    [NotMapped]
-    public TradeCloseReason? CloseReason
-    {
-        get => CloseReasonId is int id ? (TradeCloseReason)id : null;
-        set => CloseReasonId = value is TradeCloseReason reason ? (int)reason : null;
-    }
 }

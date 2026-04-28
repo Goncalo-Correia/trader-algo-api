@@ -40,14 +40,14 @@ public sealed class TradeService(
             {
                 SymbolCode     = request.SymbolCode,
                 IntervalCode   = request.IntervalCode,
-                Side           = request.Side,
-                OrderType      = TradeOrderType.Market,
+                SideId         = (int)request.Side,
+                OrderTypeId    = (int)TradeOrderType.Market,
                 Quantity       = request.Quantity,
                 RequestedPrice = null,
                 EntryPrice     = price,
                 StopLoss       = request.StopLoss,
                 TakeProfit     = request.TakeProfit,
-                Status         = TradeStatus.Active,
+                StatusId       = (int)TradeStatus.Active,
                 CreatedAt      = now,
                 OpenedAt       = now
             };
@@ -58,14 +58,14 @@ public sealed class TradeService(
             {
                 SymbolCode     = request.SymbolCode,
                 IntervalCode   = request.IntervalCode,
-                Side           = request.Side,
-                OrderType      = TradeOrderType.Limit,
+                SideId         = (int)request.Side,
+                OrderTypeId    = (int)TradeOrderType.Limit,
                 Quantity       = request.Quantity,
                 RequestedPrice = request.LimitPrice,
                 EntryPrice     = null,
                 StopLoss       = request.StopLoss,
                 TakeProfit     = request.TakeProfit,
-                Status         = TradeStatus.Pending,
+                StatusId       = (int)TradeStatus.Pending,
                 CreatedAt      = now
             };
         }
@@ -75,7 +75,7 @@ public sealed class TradeService(
 
         logger.LogInformation(
             "Trade {Id} created: {Symbol} {Side} {OrderType} qty={Quantity}",
-            trade.Id, trade.SymbolCode, trade.Side, trade.OrderType, trade.Quantity);
+            trade.Id, trade.SymbolCode, (TradeSide)trade.SideId, (TradeOrderType)trade.OrderTypeId, trade.Quantity);
 
         return ToDto(trade);
     }
@@ -85,17 +85,17 @@ public sealed class TradeService(
         var trade = await dbContext.Trades.FindAsync([id], cancellationToken)
             ?? throw new KeyNotFoundException($"Trade {id} not found.");
 
-        if (trade.Status != TradeStatus.Active)
+        if (trade.StatusId != (int)TradeStatus.Active)
             throw new InvalidOperationException(
-                $"Trade {id} cannot be stopped: current status is {trade.Status}.");
+                $"Trade {id} cannot be stopped: current status is {(TradeStatus)trade.StatusId}.");
 
         var price = await ResolveCurrentPriceAsync(trade.SymbolCode, cancellationToken);
         var now   = timeProvider.GetUtcNow();
 
-        trade.Status      = TradeStatus.Closed;
-        trade.ClosedAt    = now;
-        trade.ClosedPrice = price;
-        trade.CloseReason = TradeCloseReason.Manual;
+        trade.StatusId      = (int)TradeStatus.Closed;
+        trade.ClosedAt      = now;
+        trade.ClosedPrice   = price;
+        trade.CloseReasonId = (int)TradeCloseReason.Manual;
 
         await dbContext.SaveChangesAsync(cancellationToken);
 
@@ -112,9 +112,9 @@ public sealed class TradeService(
         var trade = await dbContext.Trades.FindAsync([id], cancellationToken)
             ?? throw new KeyNotFoundException($"Trade {id} not found.");
 
-        if (trade.Status is not (TradeStatus.Active or TradeStatus.Pending))
+        if (trade.StatusId != (int)TradeStatus.Active && trade.StatusId != (int)TradeStatus.Pending)
             throw new InvalidOperationException(
-                $"Trade {id} cannot be updated: current status is {trade.Status}.");
+                $"Trade {id} cannot be updated: current status is {(TradeStatus)trade.StatusId}.");
 
         trade.StopLoss   = request.StopLoss;
         trade.TakeProfit = request.TakeProfit;
@@ -170,7 +170,7 @@ public sealed class TradeService(
 
         foreach (var trade in trades)
         {
-            changed |= trade.Status == TradeStatus.Pending
+            changed |= trade.StatusId == (int)TradeStatus.Pending
                 ? TryFillLimit(trade, price, now)
                 : TryTriggerSLTP(trade, price, now);
         }
@@ -187,14 +187,14 @@ public sealed class TradeService(
     {
         var limit = trade.RequestedPrice!.Value;
 
-        var fills = trade.Side == TradeSide.Buy
+        var fills = trade.SideId == (int)TradeSide.Buy
             ? price <= limit   // buy limit: fill when market drops to or below limit
             : price >= limit;  // sell limit: fill when market rises to or above limit
 
         if (!fills)
             return false;
 
-        trade.Status     = TradeStatus.Active;
+        trade.StatusId   = (int)TradeStatus.Active;
         trade.EntryPrice = limit;
         trade.OpenedAt   = now;
         return true;
@@ -206,7 +206,7 @@ public sealed class TradeService(
 
         if (trade.StopLoss.HasValue)
         {
-            var hit = trade.Side == TradeSide.Buy
+            var hit = trade.SideId == (int)TradeSide.Buy
                 ? price <= trade.StopLoss.Value   // long: SL is below entry
                 : price >= trade.StopLoss.Value;  // short: SL is above entry
             if (hit)
@@ -215,7 +215,7 @@ public sealed class TradeService(
 
         if (reason is null && trade.TakeProfit.HasValue)
         {
-            var hit = trade.Side == TradeSide.Buy
+            var hit = trade.SideId == (int)TradeSide.Buy
                 ? price >= trade.TakeProfit.Value   // long: TP is above entry
                 : price <= trade.TakeProfit.Value;  // short: TP is below entry
             if (hit)
@@ -225,10 +225,10 @@ public sealed class TradeService(
         if (reason is null)
             return false;
 
-        trade.Status      = TradeStatus.Closed;
-        trade.ClosedAt    = now;
-        trade.ClosedPrice = price;
-        trade.CloseReason = reason;
+        trade.StatusId      = (int)TradeStatus.Closed;
+        trade.ClosedAt      = now;
+        trade.ClosedPrice   = price;
+        trade.CloseReasonId = (int)reason.Value;
         return true;
     }
 
@@ -253,17 +253,17 @@ public sealed class TradeService(
         Id:             t.Id,
         SymbolCode:     t.SymbolCode,
         IntervalCode:   t.IntervalCode,
-        Side:           t.Side,
-        OrderType:      t.OrderType,
+        Side:           (TradeSide)t.SideId,
+        OrderType:      (TradeOrderType)t.OrderTypeId,
         Quantity:       t.Quantity,
         RequestedPrice: t.RequestedPrice,
         EntryPrice:     t.EntryPrice,
         StopLoss:       t.StopLoss,
         TakeProfit:     t.TakeProfit,
-        Status:         t.Status,
+        Status:         (TradeStatus)t.StatusId,
         CreatedAt:      t.CreatedAt.ToUnixTimeMilliseconds(),
         OpenedAt:       t.OpenedAt?.ToUnixTimeMilliseconds(),
         ClosedAt:       t.ClosedAt?.ToUnixTimeMilliseconds(),
         ClosedPrice:    t.ClosedPrice,
-        CloseReason:    t.CloseReason);
+        CloseReason:    t.CloseReasonId is int id ? (TradeCloseReason)id : null);
 }
