@@ -1,17 +1,22 @@
+using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
 using TraderAlgoApi.Services.Binance;
 using TraderAlgoApi.Services.Charts;
 using TraderAlgoApi.Services.DataCollector;
 using TraderAlgoApi.Services.Kronos;
+using TraderAlgoApi.Services.PriceFeeds;
 using TraderAlgoApi.Services.Session;
+using TraderAlgoApi.Services.Trades;
 using TraderAlgoApi.WebSockets;
 
 const string LocalDevelopmentCorsPolicy = "LocalDevelopmentCorsPolicy";
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+        options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddSwaggerGen();
 builder.Services.AddCors(options =>
 {
@@ -27,6 +32,9 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("Supabase")));
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<NyseSessionService>();
+builder.Services.AddSingleton<PriceFeed>();
+builder.Services.AddScoped<ITradeService, TradeService>();
+builder.Services.AddHostedService<TradeMonitorService>();
 builder.Services.AddScoped<IDataCollectorService, DataCollectorService>();
 builder.Services.AddHostedService<DataCollectorTimer>();
 builder.Services.AddScoped<ILiveChartDataService, LiveChartDataService>();

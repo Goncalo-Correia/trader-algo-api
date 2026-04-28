@@ -2,12 +2,14 @@ using System.Net.WebSockets;
 using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
 using TraderAlgoApi.Models;
+using TraderAlgoApi.Services.PriceFeeds;
 
 namespace TraderAlgoApi.Services.Binance;
 
 public sealed class BinanceKlineStreamingService(
     IServiceScopeFactory scopeFactory,
     IConfiguration configuration,
+    PriceFeed priceFeed,
     ILogger<BinanceKlineStreamingService> logger) : BackgroundService
 {
     private const string DefaultWebSocketBaseUrl = "wss://stream.binance.com:443";
@@ -78,7 +80,12 @@ public sealed class BinanceKlineStreamingService(
                 break;
 
             var kline = BinanceKlineStream.FromJson(message);
-            if (kline is null || !kline.IsClosed)
+            if (kline is null)
+                continue;
+
+            priceFeed.Publish(kline.Symbol, kline.Close);
+
+            if (!kline.IsClosed)
                 continue;
 
             await PersistKlineAsync(dbContext, kline, symbolEntity.Id, intervalEntity.Id, stoppingToken);
