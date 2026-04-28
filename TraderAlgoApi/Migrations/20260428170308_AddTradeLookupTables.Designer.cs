@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using TraderAlgoApi.Data;
@@ -11,9 +12,11 @@ using TraderAlgoApi.Data;
 namespace TraderAlgoApi.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260428170308_AddTradeLookupTables")]
+    partial class AddTradeLookupTables
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -408,8 +411,9 @@ namespace TraderAlgoApi.Migrations
                         .HasPrecision(28, 10)
                         .HasColumnType("numeric(28,10)");
 
-                    b.Property<int?>("IntervalId")
-                        .HasColumnType("integer");
+                    b.Property<string>("IntervalCode")
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)");
 
                     b.Property<DateTimeOffset?>("OpenedAt")
                         .HasColumnType("timestamp with time zone");
@@ -435,8 +439,10 @@ namespace TraderAlgoApi.Migrations
                         .HasPrecision(28, 10)
                         .HasColumnType("numeric(28,10)");
 
-                    b.Property<int>("SymbolId")
-                        .HasColumnType("integer");
+                    b.Property<string>("SymbolCode")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
 
                     b.Property<decimal?>("TakeProfit")
                         .HasPrecision(28, 10)
@@ -446,15 +452,13 @@ namespace TraderAlgoApi.Migrations
 
                     b.HasIndex("CloseReasonId");
 
-                    b.HasIndex("IntervalId");
-
                     b.HasIndex("OrderTypeId");
 
                     b.HasIndex("SideId");
 
                     b.HasIndex("StatusId");
 
-                    b.HasIndex("SymbolId", "StatusId");
+                    b.HasIndex("SymbolCode", "StatusId");
 
                     b.ToTable("trades");
                 });
@@ -480,51 +484,28 @@ namespace TraderAlgoApi.Migrations
 
             modelBuilder.Entity("TraderAlgoApi.Models.Trade", b =>
                 {
-                    b.HasOne("TraderAlgoApi.Models.Lookups.TradeCloseReason", "CloseReason")
+                    b.HasOne("TraderAlgoApi.Models.Lookups.TradeCloseReason", null)
                         .WithMany()
                         .HasForeignKey("CloseReasonId")
                         .OnDelete(DeleteBehavior.Restrict);
 
-                    b.HasOne("TraderAlgoApi.Models.Interval", "Interval")
-                        .WithMany()
-                        .HasForeignKey("IntervalId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
-                    b.HasOne("TraderAlgoApi.Models.Lookups.TradeOrderType", "OrderType")
+                    b.HasOne("TraderAlgoApi.Models.Lookups.TradeOrderType", null)
                         .WithMany()
                         .HasForeignKey("OrderTypeId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.HasOne("TraderAlgoApi.Models.Lookups.TradeSide", "Side")
+                    b.HasOne("TraderAlgoApi.Models.Lookups.TradeSide", null)
                         .WithMany()
                         .HasForeignKey("SideId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.HasOne("TraderAlgoApi.Models.Lookups.TradeStatus", "Status")
+                    b.HasOne("TraderAlgoApi.Models.Lookups.TradeStatus", null)
                         .WithMany()
                         .HasForeignKey("StatusId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
-
-                    b.HasOne("TraderAlgoApi.Models.Symbol", "Symbol")
-                        .WithMany()
-                        .HasForeignKey("SymbolId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("CloseReason");
-
-                    b.Navigation("Interval");
-
-                    b.Navigation("OrderType");
-
-                    b.Navigation("Side");
-
-                    b.Navigation("Status");
-
-                    b.Navigation("Symbol");
                 });
 
             modelBuilder.Entity("TraderAlgoApi.Models.Interval", b =>

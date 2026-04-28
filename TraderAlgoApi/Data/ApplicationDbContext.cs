@@ -1,40 +1,51 @@
 using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Models;
+using TraderAlgoApi.Models.Lookups;
 
 namespace TraderAlgoApi.Data;
 
 public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : DbContext(options)
 {
-    public DbSet<Symbol> Symbols => Set<Symbol>();
-
-    public DbSet<Interval> Intervals => Set<Interval>();
-
+    public DbSet<Symbol>    Symbols   => Set<Symbol>();
+    public DbSet<Interval>  Intervals => Set<Interval>();
     public DbSet<KlineData> KlineData => Set<KlineData>();
+    public DbSet<Trade>     Trades    => Set<Trade>();
+
+    public DbSet<TradeSide>       TradeSides       => Set<TradeSide>();
+    public DbSet<TradeOrderType>  TradeOrderTypes  => Set<TradeOrderType>();
+    public DbSet<TradeStatus>     TradeStatuses    => Set<TradeStatus>();
+    public DbSet<TradeCloseReason> TradeCloseReasons => Set<TradeCloseReason>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
 
+        // -------------------------------------------------------------------
+        // Symbols
+        // -------------------------------------------------------------------
         modelBuilder.Entity<Symbol>(entity =>
         {
-            entity.HasIndex(symbol => symbol.Code).IsUnique();
+            entity.HasIndex(s => s.Code).IsUnique();
 
             entity.HasData(new Symbol
             {
-                Id = 1,
-                Code = "BTCUSDT",
-                BaseAsset = "BTC",
-                QuoteAsset = "USDT",
+                Id          = 1,
+                Code        = "BTCUSDT",
+                BaseAsset   = "BTC",
+                QuoteAsset  = "USDT",
                 DisplayName = "BTC/USDT",
-                IsActive = true,
-                IsDefault = true,
-                CreatedAt = new DateTimeOffset(2026, 4, 16, 0, 0, 0, TimeSpan.Zero)
+                IsActive    = true,
+                IsDefault   = true,
+                CreatedAt   = new DateTimeOffset(2026, 4, 16, 0, 0, 0, TimeSpan.Zero)
             });
         });
 
+        // -------------------------------------------------------------------
+        // Intervals
+        // -------------------------------------------------------------------
         modelBuilder.Entity<Interval>(entity =>
         {
-            entity.HasIndex(interval => interval.Code).IsUnique();
+            entity.HasIndex(i => i.Code).IsUnique();
 
             entity.HasData(
                 new Interval { Id = 1, Code = "1m",  DisplayName = "1 Minute",  Duration = TimeSpan.FromMinutes(1),  IsActive = true, IsDefault = false, CreatedAt = new DateTimeOffset(2026, 4, 16, 0, 0, 0, TimeSpan.Zero) },
@@ -45,19 +56,82 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
                 new Interval { Id = 6, Code = "1d",  DisplayName = "1D",        Duration = TimeSpan.FromDays(1),     IsActive = true, IsDefault = false, CreatedAt = new DateTimeOffset(2026, 4, 16, 0, 0, 0, TimeSpan.Zero) });
         });
 
+        // -------------------------------------------------------------------
+        // KlineData
+        // -------------------------------------------------------------------
         modelBuilder.Entity<KlineData>(entity =>
         {
-            entity.HasIndex(kline => new { kline.SymbolId, kline.IntervalId, kline.OpenTime }).IsUnique();
+            entity.HasIndex(k => new { k.SymbolId, k.IntervalId, k.OpenTime }).IsUnique();
 
-            entity.HasOne(kline => kline.Symbol)
-                .WithMany(symbol => symbol.Klines)
-                .HasForeignKey(kline => kline.SymbolId)
+            entity.HasOne(k => k.Symbol)
+                .WithMany(s => s.Klines)
+                .HasForeignKey(k => k.SymbolId)
                 .OnDelete(DeleteBehavior.Cascade);
 
-            entity.HasOne(kline => kline.Interval)
-                .WithMany(interval => interval.Klines)
-                .HasForeignKey(kline => kline.IntervalId)
+            entity.HasOne(k => k.Interval)
+                .WithMany(i => i.Klines)
+                .HasForeignKey(k => k.IntervalId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // -------------------------------------------------------------------
+        // Trade lookup tables — IDs match the C# enum values
+        // -------------------------------------------------------------------
+        modelBuilder.Entity<TradeSide>().HasData(
+            new TradeSide { Id = 1, Name = "Buy"  },
+            new TradeSide { Id = 2, Name = "Sell" });
+
+        modelBuilder.Entity<TradeOrderType>().HasData(
+            new TradeOrderType { Id = 1, Name = "Market" },
+            new TradeOrderType { Id = 2, Name = "Limit"  });
+
+        modelBuilder.Entity<TradeStatus>().HasData(
+            new TradeStatus { Id = 1, Name = "Pending"   },
+            new TradeStatus { Id = 2, Name = "Active"    },
+            new TradeStatus { Id = 3, Name = "Closed"    },
+            new TradeStatus { Id = 4, Name = "Cancelled" });
+
+        modelBuilder.Entity<TradeCloseReason>().HasData(
+            new TradeCloseReason { Id = 1, Name = "Manual"     },
+            new TradeCloseReason { Id = 2, Name = "StopLoss"   },
+            new TradeCloseReason { Id = 3, Name = "TakeProfit" });
+
+        // -------------------------------------------------------------------
+        // Trades — FK relationships to lookup tables, composite index
+        // -------------------------------------------------------------------
+        modelBuilder.Entity<Trade>(entity =>
+        {
+            entity.HasOne(t => t.Symbol)
+                .WithMany()
+                .HasForeignKey(t => t.SymbolId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(t => t.Interval)
+                .WithMany()
+                .HasForeignKey(t => t.IntervalId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(t => t.Side)
+                .WithMany()
+                .HasForeignKey(t => t.SideId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(t => t.OrderType)
+                .WithMany()
+                .HasForeignKey(t => t.OrderTypeId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(t => t.Status)
+                .WithMany()
+                .HasForeignKey(t => t.StatusId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(t => t.CloseReason)
+                .WithMany()
+                .HasForeignKey(t => t.CloseReasonId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasIndex(t => new { t.SymbolId, t.StatusId });
         });
     }
 }
