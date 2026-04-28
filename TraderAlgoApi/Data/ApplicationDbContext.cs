@@ -101,22 +101,22 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         // -------------------------------------------------------------------
         modelBuilder.Entity<Trade>(entity =>
         {
-            entity.HasOne<TradeSide>()
+            entity.HasOne(t => t.Side)
                 .WithMany()
                 .HasForeignKey(t => t.SideId)
                 .OnDelete(DeleteBehavior.Restrict);
 
-            entity.HasOne<TradeOrderType>()
+            entity.HasOne(t => t.OrderType)
                 .WithMany()
                 .HasForeignKey(t => t.OrderTypeId)
                 .OnDelete(DeleteBehavior.Restrict);
 
-            entity.HasOne<TradeStatus>()
+            entity.HasOne(t => t.Status)
                 .WithMany()
                 .HasForeignKey(t => t.StatusId)
                 .OnDelete(DeleteBehavior.Restrict);
 
-            entity.HasOne<TradeCloseReason>()
+            entity.HasOne(t => t.CloseReason)
                 .WithMany()
                 .HasForeignKey(t => t.CloseReasonId)
                 .OnDelete(DeleteBehavior.Restrict);

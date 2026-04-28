@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using Microsoft.EntityFrameworkCore;
+using TraderAlgoApi.Models.Lookups;
 
 namespace TraderAlgoApi.Models;
 
@@ -19,7 +20,13 @@ public sealed class Trade
 
     public int SideId { get; set; }
 
+    [ForeignKey(nameof(SideId))]
+    public TradeSide Side { get; set; } = null!;
+
     public int OrderTypeId { get; set; }
+
+    [ForeignKey(nameof(OrderTypeId))]
+    public TradeOrderType OrderType { get; set; } = null!;
 
     [Precision(28, 10)]
     public decimal Quantity { get; set; }
@@ -40,6 +47,9 @@ public sealed class Trade
 
     public int StatusId { get; set; }
 
+    [ForeignKey(nameof(StatusId))]
+    public TradeStatus Status { get; set; } = null!;
+
     public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset? OpenedAt { get; set; }
@@ -50,4 +60,7 @@ public sealed class Trade
     public decimal? ClosedPrice { get; set; }
 
     public int? CloseReasonId { get; set; }
+
+    [ForeignKey(nameof(CloseReasonId))]
+    public TradeCloseReason? CloseReason { get; set; }
 }
