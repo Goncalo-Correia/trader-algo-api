@@ -207,13 +207,17 @@ public sealed class TradeService(
             .Include(t => t.Symbol)
             .Include(t => t.Interval);
 
-    private static bool TryFillLimit(Trade trade, decimal price, DateTimeOffset now)
+    private bool TryFillLimit(Trade trade, decimal price, DateTimeOffset now)
     {
         var limit = trade.RequestedPrice!.Value;
 
         var fills = trade.SideId == (int)TradeSide.Buy
             ? price <= limit   // buy limit: fill when market drops to or below limit
             : price >= limit;  // sell limit: fill when market rises to or above limit
+
+        logger.LogDebug(
+            "Trade {Id} limit check: side={Side} limit={Limit} price={Price} fills={Fills}",
+            trade.Id, (TradeSide)trade.SideId, limit, price, fills);
 
         if (!fills)
             return false;
@@ -224,7 +228,7 @@ public sealed class TradeService(
         return true;
     }
 
-    private static bool TryTriggerSLTP(Trade trade, decimal price, DateTimeOffset now)
+    private bool TryTriggerSLTP(Trade trade, decimal price, DateTimeOffset now)
     {
         var entry = trade.EntryPrice!.Value;
 
@@ -239,6 +243,11 @@ public sealed class TradeService(
         {
             var slPrice = isBuy ? entry - trade.StopLoss.Value : entry + trade.StopLoss.Value;
             var hit     = isBuy ? price <= slPrice             : price >= slPrice;
+
+            logger.LogDebug(
+                "Trade {Id} SL check: side={Side} entry={Entry} slOffset={SlOffset} slPrice={SlPrice} price={Price} hit={Hit}",
+                trade.Id, (TradeSide)trade.SideId, entry, trade.StopLoss.Value, slPrice, price, hit);
+
             if (hit)
                 reason = TradeCloseReason.StopLoss;
         }
@@ -247,12 +256,21 @@ public sealed class TradeService(
         {
             var tpPrice = isBuy ? entry + trade.TakeProfit.Value : entry - trade.TakeProfit.Value;
             var hit     = isBuy ? price >= tpPrice               : price <= tpPrice;
+
+            logger.LogDebug(
+                "Trade {Id} TP check: side={Side} entry={Entry} tpOffset={TpOffset} tpPrice={TpPrice} price={Price} hit={Hit}",
+                trade.Id, (TradeSide)trade.SideId, entry, trade.TakeProfit.Value, tpPrice, price, hit);
+
             if (hit)
                 reason = TradeCloseReason.TakeProfit;
         }
 
         if (reason is null)
             return false;
+
+        logger.LogInformation(
+            "Trade {Id} triggered {Reason}: entry={Entry} closedPrice={Price} slOffset={SlOffset} tpOffset={TpOffset}",
+            trade.Id, reason.Value, entry, price, trade.StopLoss, trade.TakeProfit);
 
         trade.StatusId      = (int)TradeStatus.Closed;
         trade.ClosedAt      = now;
@@ -278,21 +296,37 @@ public sealed class TradeService(
             $"No price available for symbol {symbol}. Ensure the market data stream is running.");
     }
 
-    private static TradeResponseDto ToDto(Trade t) => new(
-        Id:             t.Id,
-        SymbolCode:     t.Symbol.Code,
-        IntervalCode:   t.Interval?.Code,
-        Side:           (TradeSide)t.SideId,
-        OrderType:      (TradeOrderType)t.OrderTypeId,
-        Quantity:       t.Quantity,
-        RequestedPrice: t.RequestedPrice,
-        EntryPrice:     t.EntryPrice,
-        StopLoss:       t.StopLoss,
-        TakeProfit:     t.TakeProfit,
-        Status:         (TradeStatus)t.StatusId,
-        CreatedAt:      t.CreatedAt.ToUnixTimeMilliseconds(),
-        OpenedAt:       t.OpenedAt?.ToUnixTimeMilliseconds(),
-        ClosedAt:       t.ClosedAt?.ToUnixTimeMilliseconds(),
-        ClosedPrice:    t.ClosedPrice,
-        CloseReason:    t.CloseReasonId is int id ? (TradeCloseReason)id : null);
+    private TradeResponseDto ToDto(Trade t)
+    {
+        decimal? unrealizedPnl = null;
+        if (t.StatusId == (int)TradeStatus.Active && t.EntryPrice.HasValue)
+        {
+            var currentPrice = priceFeed.GetLatestPrice(t.Symbol.Code);
+            if (currentPrice.HasValue)
+            {
+                unrealizedPnl = t.SideId == (int)TradeSide.Buy
+                    ? (currentPrice.Value - t.EntryPrice.Value) * t.Quantity
+                    : (t.EntryPrice.Value - currentPrice.Value) * t.Quantity;
+            }
+        }
+
+        return new TradeResponseDto(
+            Id:             t.Id,
+            SymbolCode:     t.Symbol.Code,
+            IntervalCode:   t.Interval?.Code,
+            Side:           (TradeSide)t.SideId,
+            OrderType:      (TradeOrderType)t.OrderTypeId,
+            Quantity:       t.Quantity,
+            RequestedPrice: t.RequestedPrice,
+            EntryPrice:     t.EntryPrice,
+            StopLoss:       t.StopLoss,
+            TakeProfit:     t.TakeProfit,
+            Status:         (TradeStatus)t.StatusId,
+            CreatedAt:      t.CreatedAt.ToUnixTimeMilliseconds(),
+            OpenedAt:       t.OpenedAt?.ToUnixTimeMilliseconds(),
+            ClosedAt:       t.ClosedAt?.ToUnixTimeMilliseconds(),
+            ClosedPrice:    t.ClosedPrice,
+            CloseReason:    t.CloseReasonId is int id ? (TradeCloseReason)id : null,
+            UnrealizedPnl:  unrealizedPnl);
+    }
 }

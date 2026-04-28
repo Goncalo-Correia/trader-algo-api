@@ -19,4 +19,5 @@ public sealed record TradeResponseDto(
     [property: JsonPropertyName("openedAt")]       long? OpenedAt,
     [property: JsonPropertyName("closedAt")]       long? ClosedAt,
     [property: JsonPropertyName("closedPrice")]    decimal? ClosedPrice,
-    [property: JsonPropertyName("closeReason")]    TradeCloseReason? CloseReason);
+    [property: JsonPropertyName("closeReason")]    TradeCloseReason? CloseReason,
+    [property: JsonPropertyName("unrealizedPnl")]  decimal? UnrealizedPnl);
