@@ -226,22 +226,27 @@ public sealed class TradeService(
 
     private static bool TryTriggerSLTP(Trade trade, decimal price, DateTimeOffset now)
     {
+        var entry = trade.EntryPrice!.Value;
+
+        // StopLoss and TakeProfit are stored as positive unit offsets from entry.
+        // Buy (long):  SL triggers below entry,  TP triggers above entry.
+        // Sell (short): SL triggers above entry, TP triggers below entry.
+        var isBuy = trade.SideId == (int)TradeSide.Buy;
+
         TradeCloseReason? reason = null;
 
         if (trade.StopLoss.HasValue)
         {
-            var hit = trade.SideId == (int)TradeSide.Buy
-                ? price <= trade.StopLoss.Value   // long: SL is below entry
-                : price >= trade.StopLoss.Value;  // short: SL is above entry
+            var slPrice = isBuy ? entry - trade.StopLoss.Value : entry + trade.StopLoss.Value;
+            var hit     = isBuy ? price <= slPrice             : price >= slPrice;
             if (hit)
                 reason = TradeCloseReason.StopLoss;
         }
 
         if (reason is null && trade.TakeProfit.HasValue)
         {
-            var hit = trade.SideId == (int)TradeSide.Buy
-                ? price >= trade.TakeProfit.Value   // long: TP is above entry
-                : price <= trade.TakeProfit.Value;  // short: TP is below entry
+            var tpPrice = isBuy ? entry + trade.TakeProfit.Value : entry - trade.TakeProfit.Value;
+            var hit     = isBuy ? price >= tpPrice               : price <= tpPrice;
             if (hit)
                 reason = TradeCloseReason.TakeProfit;
         }
