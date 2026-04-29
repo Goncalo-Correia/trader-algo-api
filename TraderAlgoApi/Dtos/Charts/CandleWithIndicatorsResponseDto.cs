@@ -20,9 +20,9 @@ public sealed record CandleWithIndicatorsResponseDto(
     // ── Relative Strength Index ───────────────────────────────────────────────
     [property: JsonPropertyName("rsi")]        decimal? Rsi,
     [property: JsonPropertyName("rsi_smooth")] decimal? RsiSmooth,
-    [property: JsonPropertyName("divergence")] bool?    Divergence,
+    [property: JsonPropertyName("rsi_divergence")] bool?    Divergence,
 
     // ── MACD ──────────────────────────────────────────────────────────────────
-    [property: JsonPropertyName("macd_line")]   decimal? MacdLine,
-    [property: JsonPropertyName("signal_line")] decimal? SignalLine,
-    [property: JsonPropertyName("histogram")]   decimal? Histogram);
+    [property: JsonPropertyName("macd_line")]    decimal? MacdLine,
+    [property: JsonPropertyName("macd_signal")]  decimal? SignalLine,
+    [property: JsonPropertyName("macd_histogram")] decimal? Histogram);
