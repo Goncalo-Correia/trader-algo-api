@@ -8,6 +8,10 @@ using TraderAlgoApi.Services.Indicators;
 using TraderAlgoApi.Services.Kronos;
 using TraderAlgoApi.Services.PriceFeeds;
 using TraderAlgoApi.Services.Session;
+using TraderAlgoApi.Services.Rules;
+using TraderAlgoApi.Services.Rules.Macd;
+using TraderAlgoApi.Services.Rules.Rsi;
+using TraderAlgoApi.Services.Rules.Sma;
 using TraderAlgoApi.Services.Trades;
 using TraderAlgoApi.WebSockets;
 
@@ -34,6 +38,10 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<NyseSessionService>();
 builder.Services.AddSingleton<PriceFeed>();
+builder.Services.AddScoped<ITradingRuleContextService, TradingRuleContextService>();
+builder.Services.AddSingleton<SmaTradingRule>();
+builder.Services.AddSingleton<RsiTradingRule>();
+builder.Services.AddSingleton<MacdTradingRule>();
 builder.Services.AddScoped<ITradeService, TradeService>();
 builder.Services.AddHostedService<TradeMonitorService>();
 builder.Services.AddScoped<ISimpleMovingAverageService, SimpleMovingAverageService>();

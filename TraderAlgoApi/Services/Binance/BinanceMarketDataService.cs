@@ -1,13 +1,17 @@
 using System.Net.WebSockets;
 using System.Text.Json;
 using TraderAlgoApi.Dtos.Charts;
+using TraderAlgoApi.Services.Indicators;
 
 namespace TraderAlgoApi.Services.Binance;
 
 public sealed class BinanceMarketDataService(
     IHttpClientFactory httpClientFactory,
     IConfiguration configuration,
-    ILogger<BinanceMarketDataService> logger) : IBinanceMarketDataService
+    ILogger<BinanceMarketDataService> logger,
+    ISimpleMovingAverageService smaService,
+    IRsiService rsiService,
+    IMacdService macdService) : IBinanceMarketDataService
 {
     private const string HttpClientName = "Binance";
     private const string DefaultWebSocketBaseUrl = "wss://stream.binance.com:443";
@@ -77,6 +81,72 @@ public sealed class BinanceMarketDataService(
                 kline.Volume,
                 kline.TakerBuyBaseAssetVolume,
                 kline.Volume - kline.TakerBuyBaseAssetVolume),
+            cancellationToken);
+    }
+
+    public async Task StreamKlineCandlesWithIndicatorsAsync(
+        WebSocket clientSocket,
+        string symbol,
+        string interval,
+        CancellationToken cancellationToken = default)
+    {
+        const int WindowSize = 200;
+
+        var historicalKlines = await GetKlinesAsync(symbol, interval, limit: WindowSize, cancellationToken: cancellationToken);
+        var closes = historicalKlines.Select(k => k.Close).ToList();
+        var lastKlineTime = historicalKlines.Count > 0
+            ? historicalKlines[^1].OpenTime.ToUnixTimeSeconds()
+            : 0L;
+
+        await StreamKlinesInternalAsync(
+            clientSocket,
+            symbol,
+            interval,
+            kline =>
+            {
+                if (kline.Time == lastKlineTime)
+                {
+                    if (closes.Count > 0)
+                        closes[^1] = kline.Close;
+                }
+                else
+                {
+                    closes.Add(kline.Close);
+                    if (closes.Count > WindowSize)
+                        closes.RemoveAt(0);
+                    lastKlineTime = kline.Time;
+                }
+
+                var lastIndex = closes.Count - 1;
+
+                var (sma20, sma100) = smaService.Compute(closes, lastIndex);
+
+                var rsiValues = rsiService.ComputeAll(closes);
+                var rsi = rsiValues[lastIndex];
+                var rsiSmooth = rsiService.ComputeSmooth(rsiValues, lastIndex);
+                var divergence = rsiService.DetectDivergence(closes, rsiValues, lastIndex);
+
+                var macdValues = macdService.ComputeAll(closes);
+                var (macdLine, signalLine, histogram) = macdValues[lastIndex];
+
+                return new CandleWithIndicatorsResponseDto(
+                    kline.Time,
+                    kline.Open,
+                    kline.High,
+                    kline.Low,
+                    kline.Close,
+                    kline.Volume,
+                    kline.TakerBuyBaseAssetVolume,
+                    kline.Volume - kline.TakerBuyBaseAssetVolume,
+                    sma20,
+                    sma100,
+                    rsi,
+                    rsiSmooth,
+                    divergence,
+                    macdLine,
+                    signalLine,
+                    histogram);
+            },
             cancellationToken);
     }
 

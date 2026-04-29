@@ -16,5 +16,16 @@ internal static class WebSocketEndpoints
             await liveChartDataService.StreamCandlesAsync(context, symbol, interval, cancellationToken);
         })
         .ExcludeFromDescription();
+
+        app.MapGet("/ws/charts/candleswithindicators", async (
+            HttpContext context,
+            string symbol,
+            string interval,
+            ILiveChartDataService liveChartDataService,
+            CancellationToken cancellationToken) =>
+        {
+            await liveChartDataService.StreamCandlesWithIndicatorsAsync(context, symbol, interval, cancellationToken);
+        })
+        .ExcludeFromDescription();
     }
 }

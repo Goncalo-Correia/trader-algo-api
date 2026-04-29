@@ -112,10 +112,11 @@ public sealed class TradeService(
         trade.ClosedAt      = now;
         trade.ClosedPrice   = price;
         trade.CloseReasonId = (int)TradeCloseReason.Manual;
+        trade.Pnl           = CalculatePnl(trade, price);
 
         await dbContext.SaveChangesAsync(cancellationToken);
 
-        logger.LogInformation("Trade {Id} closed manually at {Price}", id, price);
+        logger.LogInformation("Trade {Id} closed manually at {Price} pnl={Pnl}", id, price, trade.Pnl);
 
         return ToDto(trade);
     }
@@ -276,6 +277,7 @@ public sealed class TradeService(
         trade.ClosedAt      = now;
         trade.ClosedPrice   = price;
         trade.CloseReasonId = (int)reason.Value;
+        trade.Pnl           = CalculatePnl(trade, price);
         return true;
     }
 
@@ -327,6 +329,17 @@ public sealed class TradeService(
             ClosedAt:       t.ClosedAt?.ToUnixTimeMilliseconds(),
             ClosedPrice:    t.ClosedPrice,
             CloseReason:    t.CloseReasonId is int id ? (TradeCloseReason)id : null,
+            Pnl:            t.Pnl,
             UnrealizedPnl:  unrealizedPnl);
+    }
+
+    private static decimal? CalculatePnl(Trade trade, decimal closedPrice)
+    {
+        if (trade.EntryPrice is null)
+            return null;
+
+        return trade.SideId == (int)TradeSide.Buy
+            ? (closedPrice - trade.EntryPrice.Value) * trade.Quantity
+            : (trade.EntryPrice.Value - closedPrice) * trade.Quantity;
     }
 }

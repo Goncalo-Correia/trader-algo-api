@@ -17,4 +17,10 @@ public interface IBinanceMarketDataService
         string symbol,
         string interval,
         CancellationToken cancellationToken = default);
+
+    Task StreamKlineCandlesWithIndicatorsAsync(
+        WebSocket clientSocket,
+        string symbol,
+        string interval,
+        CancellationToken cancellationToken = default);
 }

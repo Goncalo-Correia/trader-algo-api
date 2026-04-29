@@ -56,7 +56,9 @@ public sealed class RsiService : IRsiService
 
     public bool? DetectDivergence(IReadOnlyList<decimal> closes, IReadOnlyList<decimal?> rsiValues, int index, int lookback = 5)
     {
-        if (index < lookback)
+        // Pivot candidates span [index-lookback, index-1]; each pivot j needs closes[j-1] and closes[j+1],
+        // so the earliest valid j is 1. That requires index >= lookback + 1.
+        if (index < lookback + 1)
             return null;
 
         if (rsiValues[index] is null)
@@ -65,28 +67,36 @@ public sealed class RsiService : IRsiService
         var currentRsi = rsiValues[index]!.Value;
         var currentClose = closes[index];
 
-        // Find the swing low and swing high in the lookback window (excluding current candle)
-        var windowStart = index - lookback;
-        var minClose = closes[windowStart];
-        var minIdx = windowStart;
-        var maxClose = closes[windowStart];
-        var maxIdx = windowStart;
+        var bullish = false;
+        var bearish = false;
 
-        for (var i = windowStart + 1; i < index; i++)
+        for (var j = index - lookback; j <= index - 1; j++)
         {
-            if (closes[i] < minClose) { minClose = closes[i]; minIdx = i; }
-            if (closes[i] > maxClose) { maxClose = closes[i]; maxIdx = i; }
+            if (j < 1 || j >= closes.Count - 1)
+                continue;
+
+            if (!rsiValues[j].HasValue)
+                continue;
+
+            var pivotClose = closes[j];
+            var pivotRsi = rsiValues[j]!.Value;
+
+            // Confirmed swing low: both neighbours are strictly higher.
+            // Bullish divergence: price makes a lower low while RSI makes a higher low.
+            if (closes[j - 1] > closes[j] && closes[j] < closes[j + 1])
+            {
+                if (currentClose < pivotClose && currentRsi > pivotRsi)
+                    bullish = true;
+            }
+
+            // Confirmed swing high: both neighbours are strictly lower.
+            // Bearish divergence: price makes a higher high while RSI makes a lower high.
+            if (closes[j - 1] < closes[j] && closes[j] > closes[j + 1])
+            {
+                if (currentClose > pivotClose && currentRsi < pivotRsi)
+                    bearish = true;
+            }
         }
-
-        // Bullish divergence: current close is a lower low, but RSI is a higher low
-        var bullish = currentClose < minClose
-            && rsiValues[minIdx].HasValue
-            && currentRsi > rsiValues[minIdx]!.Value;
-
-        // Bearish divergence: current close is a higher high, but RSI is a lower high
-        var bearish = currentClose > maxClose
-            && rsiValues[maxIdx].HasValue
-            && currentRsi < rsiValues[maxIdx]!.Value;
 
         return bullish || bearish;
     }
