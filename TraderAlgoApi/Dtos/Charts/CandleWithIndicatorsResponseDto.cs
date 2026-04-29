@@ -24,5 +24,5 @@ public sealed record CandleWithIndicatorsResponseDto(
 
     // ── MACD ──────────────────────────────────────────────────────────────────
     [property: JsonPropertyName("macd_line")]    decimal? MacdLine,
-    [property: JsonPropertyName("macd_signal")]  decimal? SignalLine,
+    [property: JsonPropertyName("macd_signal_line")]  decimal? SignalLine,
     [property: JsonPropertyName("macd_histogram")] decimal? Histogram);
