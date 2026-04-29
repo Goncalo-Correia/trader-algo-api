@@ -103,16 +103,20 @@ public sealed class DataCollectorService(
                 updatedCount += changedCount;
 
                 // Determine the indicator recompute range.
-                // For changed candles, extend 'to' by 99 intervals to cover downstream SMA windows.
+                // A changed candle invalidates RSI (Wilder smoothing) and MACD (EMA carry) for every
+                // subsequent candle in the series, so extend the recompute window to the latest stored
+                // candle rather than capping at an arbitrary bar count.
                 var allAffectedTimes = newKlines.Select(k => k.OpenTime).Concat(changedOpenTimes).ToList();
                 var indicatorFrom = allAffectedTimes.Min();
                 var indicatorTo = allAffectedTimes.Max();
 
                 if (changedOpenTimes.Count > 0)
                 {
-                    var cascadeTo = changedOpenTimes.Max() + interval.Duration * 99;
-                    if (cascadeTo > indicatorTo)
-                        indicatorTo = cascadeTo;
+                    var latestInDb = await dbContext.KlineData
+                        .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id)
+                        .MaxAsync(k => k.OpenTime, cancellationToken);
+                    if (latestInDb > indicatorTo)
+                        indicatorTo = latestInDb;
                 }
 
                 await indicatorSyncService.ComputeAndSaveAsync(
@@ -191,6 +195,7 @@ public sealed class DataCollectorService(
         foreach (var (gapStart, gapEnd) in gaps)
         {
             var cursor = gapStart;
+            DateTimeOffset? firstInsertedInGap = null;
 
             while (true)
             {
@@ -209,18 +214,27 @@ public sealed class DataCollectorService(
 
                 fetchedCount += eligible.Length;
 
+                // Guard against a race with the live streamer: skip candles already persisted.
+                var batchOpenTimes = eligible.Select(k => k.OpenTime).ToList();
+                var existingTimes = await dbContext.KlineData
+                    .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id
+                                && batchOpenTimes.Contains(k.OpenTime))
+                    .Select(k => k.OpenTime)
+                    .ToHashSetAsync(cancellationToken);
+
                 var toInsert = eligible
+                    .Where(k => !existingTimes.Contains(k.OpenTime))
                     .Select(k => ToKlineData(k, symbol.Id, interval.Id))
                     .ToArray();
 
-                dbContext.KlineData.AddRange(toInsert);
-                await dbContext.SaveChangesAsync(cancellationToken);
-                insertedCount += toInsert.Length;
+                if (toInsert.Length > 0)
+                {
+                    dbContext.KlineData.AddRange(toInsert);
+                    await dbContext.SaveChangesAsync(cancellationToken);
+                    insertedCount += toInsert.Length;
 
-                await indicatorSyncService.ComputeAndSaveAsync(
-                    symbol.Id, interval.Id,
-                    toInsert[0].OpenTime, toInsert[^1].OpenTime,
-                    cancellationToken);
+                    firstInsertedInGap ??= toInsert[0].OpenTime;
+                }
 
                 if (eligible[^1].OpenTime > latestCandleOpenTime)
                     latestCandleOpenTime = eligible[^1].OpenTime;
@@ -235,6 +249,21 @@ public sealed class DataCollectorService(
                     break;
 
                 cursor = nextCursor;
+            }
+
+            // Sync indicators once per gap, extending the recompute window to the latest candle
+            // in the series. Filling an internal gap makes every downstream SMA/RSI/MACD row stale,
+            // so the range must cover the full tail, not just the inserted segment.
+            if (firstInsertedInGap is not null)
+            {
+                var latestInDb = await dbContext.KlineData
+                    .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id)
+                    .MaxAsync(k => k.OpenTime, cancellationToken);
+
+                await indicatorSyncService.ComputeAndSaveAsync(
+                    symbol.Id, interval.Id,
+                    firstInsertedInGap.Value, latestInDb,
+                    cancellationToken);
             }
         }
 

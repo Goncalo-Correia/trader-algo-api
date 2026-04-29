@@ -7,4 +7,10 @@ public interface ILiveChartDataService
         string? symbol = null,
         string? interval = null,
         CancellationToken cancellationToken = default);
+
+    Task StreamCandlesWithIndicatorsAsync(
+        HttpContext context,
+        string? symbol = null,
+        string? interval = null,
+        CancellationToken cancellationToken = default);
 }

@@ -64,6 +64,10 @@ public sealed class Trade
     [Precision(28, 10)]
     public decimal? ClosedPrice { get; set; }
 
+    /// <summary>Realized profit/loss, computed when the trade closes. Null while pending or active.</summary>
+    [Precision(28, 10)]
+    public decimal? Pnl { get; set; }
+
     public int? CloseReasonId { get; set; }
 
     [ForeignKey(nameof(CloseReasonId))]
