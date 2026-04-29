@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
 using TraderAlgoApi.Services.DataCollector;
+using TraderAlgoApi.Services.Indicators;
 
 namespace TraderAlgoApi.Controllers;
 
@@ -9,7 +10,8 @@ namespace TraderAlgoApi.Controllers;
 [Route("api/data-collector")]
 public sealed class DataCollectorController(
     ApplicationDbContext dbContext,
-    IDataCollectorService dataCollectorService) : ControllerBase
+    IDataCollectorService dataCollectorService,
+    IIndicatorSyncService indicatorSyncService) : ControllerBase
 {
     private static readonly DateTimeOffset DataStartDate = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
@@ -83,6 +85,20 @@ public sealed class DataCollectorController(
             }
         }
 
+        return Ok(results);
+    }
+
+    [HttpPost("indicators/full-sync")]
+    public async Task<ActionResult<IReadOnlyList<IndicatorSyncResult>>> IndicatorsFullSync(CancellationToken cancellationToken)
+    {
+        var results = await indicatorSyncService.FullSyncAsync(cancellationToken);
+        return Ok(results);
+    }
+
+    [HttpPost("indicators/partial-sync")]
+    public async Task<ActionResult<IReadOnlyList<IndicatorSyncResult>>> IndicatorsPartialSync(CancellationToken cancellationToken)
+    {
+        var results = await indicatorSyncService.PartialSyncAsync(cancellationToken);
         return Ok(results);
     }
 }

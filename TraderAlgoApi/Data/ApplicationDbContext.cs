@@ -16,6 +16,12 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<TradeStatus>     TradeStatuses    => Set<TradeStatus>();
     public DbSet<TradeCloseReason> TradeCloseReasons => Set<TradeCloseReason>();
 
+    public DbSet<SimpleMovingAverage> SimpleMovingAverages => Set<SimpleMovingAverage>();
+
+    public DbSet<RelativeStrengthIndex> RelativeStrengthIndexes => Set<RelativeStrengthIndex>();
+
+    public DbSet<Macd> Macd => Set<Macd>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -132,6 +138,36 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
                 .OnDelete(DeleteBehavior.Restrict);
 
             entity.HasIndex(t => new { t.SymbolId, t.StatusId });
+        });
+
+        modelBuilder.Entity<SimpleMovingAverage>(entity =>
+        {
+            entity.HasKey(sma => sma.KlineDataId);
+
+            entity.HasOne(sma => sma.KlineData)
+                .WithOne(kline => kline.SimpleMovingAverage)
+                .HasForeignKey<SimpleMovingAverage>(sma => sma.KlineDataId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<RelativeStrengthIndex>(entity =>
+        {
+            entity.HasKey(rsi => rsi.KlineDataId);
+
+            entity.HasOne(rsi => rsi.KlineData)
+                .WithOne(kline => kline.RelativeStrengthIndex)
+                .HasForeignKey<RelativeStrengthIndex>(rsi => rsi.KlineDataId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<Macd>(entity =>
+        {
+            entity.HasKey(macd => macd.KlineDataId);
+
+            entity.HasOne(macd => macd.KlineData)
+                .WithOne(kline => kline.Macd)
+                .HasForeignKey<Macd>(macd => macd.KlineDataId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }
