@@ -2,12 +2,14 @@ using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
 using TraderAlgoApi.Models;
 using TraderAlgoApi.Services.Binance;
+using TraderAlgoApi.Services.Indicators;
 
 namespace TraderAlgoApi.Services.DataCollector;
 
 public sealed class DataCollectorService(
     ApplicationDbContext dbContext,
-    IBinanceMarketDataService binanceMarketDataService) : IDataCollectorService
+    IBinanceMarketDataService binanceMarketDataService,
+    IIndicatorSyncService indicatorSyncService) : IDataCollectorService
 {
     private const int BinanceMaxKlineLimit = 1000;
 
@@ -73,16 +75,16 @@ public sealed class DataCollectorService(
                 .Select(kline => ToKlineData(kline, symbol.Id, interval.Id))
                 .ToArray();
 
+            var changedOpenTimes = new List<DateTimeOffset>();
             var changedCount = 0;
             foreach (var sourceKline in eligibleKlines)
             {
                 if (!existingKlinesByOpenTime.TryGetValue(sourceKline.OpenTime, out var existingKline))
-                {
                     continue;
-                }
 
                 if (ApplyChanges(existingKline, sourceKline))
                 {
+                    changedOpenTimes.Add(existingKline.OpenTime);
                     changedCount++;
                 }
             }
@@ -99,6 +101,22 @@ public sealed class DataCollectorService(
             {
                 await dbContext.SaveChangesAsync(cancellationToken);
                 updatedCount += changedCount;
+
+                // Determine the indicator recompute range.
+                // For changed candles, extend 'to' by 99 intervals to cover downstream SMA windows.
+                var allAffectedTimes = newKlines.Select(k => k.OpenTime).Concat(changedOpenTimes).ToList();
+                var indicatorFrom = allAffectedTimes.Min();
+                var indicatorTo = allAffectedTimes.Max();
+
+                if (changedOpenTimes.Count > 0)
+                {
+                    var cascadeTo = changedOpenTimes.Max() + interval.Duration * 99;
+                    if (cascadeTo > indicatorTo)
+                        indicatorTo = cascadeTo;
+                }
+
+                await indicatorSyncService.ComputeAndSaveAsync(
+                    symbol.Id, interval.Id, indicatorFrom, indicatorTo, cancellationToken);
             }
 
             var nextCursor = eligibleKlines[^1].OpenTime.Add(interval.Duration);
@@ -198,6 +216,11 @@ public sealed class DataCollectorService(
                 dbContext.KlineData.AddRange(toInsert);
                 await dbContext.SaveChangesAsync(cancellationToken);
                 insertedCount += toInsert.Length;
+
+                await indicatorSyncService.ComputeAndSaveAsync(
+                    symbol.Id, interval.Id,
+                    toInsert[0].OpenTime, toInsert[^1].OpenTime,
+                    cancellationToken);
 
                 if (eligible[^1].OpenTime > latestCandleOpenTime)
                     latestCandleOpenTime = eligible[^1].OpenTime;

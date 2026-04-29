@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using TraderAlgoApi.Data;
@@ -11,9 +12,11 @@ using TraderAlgoApi.Data;
 namespace TraderAlgoApi.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260428234605_ReplaceKlineDataIndicatorsWithSimpleMovingAverages")]
+    partial class ReplaceKlineDataIndicatorsWithSimpleMovingAverages
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -190,190 +193,6 @@ namespace TraderAlgoApi.Migrations
                     b.ToTable("kline_data");
                 });
 
-            modelBuilder.Entity("TraderAlgoApi.Models.Lookups.TradeCloseReason", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(30)
-                        .HasColumnType("character varying(30)");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("trade_close_reasons");
-
-                    b.HasData(
-                        new
-                        {
-                            Id = 1,
-                            Name = "Manual"
-                        },
-                        new
-                        {
-                            Id = 2,
-                            Name = "StopLoss"
-                        },
-                        new
-                        {
-                            Id = 3,
-                            Name = "TakeProfit"
-                        });
-                });
-
-            modelBuilder.Entity("TraderAlgoApi.Models.Lookups.TradeOrderType", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(30)
-                        .HasColumnType("character varying(30)");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("trade_order_types");
-
-                    b.HasData(
-                        new
-                        {
-                            Id = 1,
-                            Name = "Market"
-                        },
-                        new
-                        {
-                            Id = 2,
-                            Name = "Limit"
-                        });
-                });
-
-            modelBuilder.Entity("TraderAlgoApi.Models.Lookups.TradeSide", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(30)
-                        .HasColumnType("character varying(30)");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("trade_sides");
-
-                    b.HasData(
-                        new
-                        {
-                            Id = 1,
-                            Name = "Buy"
-                        },
-                        new
-                        {
-                            Id = 2,
-                            Name = "Sell"
-                        });
-                });
-
-            modelBuilder.Entity("TraderAlgoApi.Models.Lookups.TradeStatus", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(30)
-                        .HasColumnType("character varying(30)");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("trade_statuses");
-
-                    b.HasData(
-                        new
-                        {
-                            Id = 1,
-                            Name = "Pending"
-                        },
-                        new
-                        {
-                            Id = 2,
-                            Name = "Active"
-                        },
-                        new
-                        {
-                            Id = 3,
-                            Name = "Closed"
-                        },
-                        new
-                        {
-                            Id = 4,
-                            Name = "Cancelled"
-                        });
-                });
-
-            modelBuilder.Entity("TraderAlgoApi.Models.Macd", b =>
-                {
-                    b.Property<long>("KlineDataId")
-                        .HasColumnType("bigint");
-
-                    b.Property<decimal?>("Histogram")
-                        .HasPrecision(28, 10)
-                        .HasColumnType("numeric(28,10)")
-                        .HasColumnName("histogram");
-
-                    b.Property<decimal?>("MacdLine")
-                        .HasPrecision(28, 10)
-                        .HasColumnType("numeric(28,10)")
-                        .HasColumnName("macd_line");
-
-                    b.Property<decimal?>("SignalLine")
-                        .HasPrecision(28, 10)
-                        .HasColumnType("numeric(28,10)")
-                        .HasColumnName("signal_line");
-
-                    b.HasKey("KlineDataId");
-
-                    b.ToTable("macd");
-                });
-
-            modelBuilder.Entity("TraderAlgoApi.Models.RelativeStrengthIndex", b =>
-                {
-                    b.Property<long>("KlineDataId")
-                        .HasColumnType("bigint");
-
-                    b.Property<bool?>("Divergence")
-                        .HasColumnType("boolean")
-                        .HasColumnName("divergence");
-
-                    b.Property<decimal?>("Rsi")
-                        .HasPrecision(28, 10)
-                        .HasColumnType("numeric(28,10)")
-                        .HasColumnName("rsi");
-
-                    b.Property<decimal?>("RsiSmooth")
-                        .HasPrecision(28, 10)
-                        .HasColumnType("numeric(28,10)")
-                        .HasColumnName("rsi_smooth");
-
-                    b.HasKey("KlineDataId");
-
-                    b.ToTable("relative_strength_indexes");
-                });
-
             modelBuilder.Entity("TraderAlgoApi.Models.SimpleMovingAverage", b =>
                 {
                     b.Property<long>("KlineDataId")
@@ -452,82 +271,6 @@ namespace TraderAlgoApi.Migrations
                         });
                 });
 
-            modelBuilder.Entity("TraderAlgoApi.Models.Trade", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<int?>("CloseReasonId")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset?>("ClosedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<decimal?>("ClosedPrice")
-                        .HasPrecision(28, 10)
-                        .HasColumnType("numeric(28,10)");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<decimal?>("EntryPrice")
-                        .HasPrecision(28, 10)
-                        .HasColumnType("numeric(28,10)");
-
-                    b.Property<int?>("IntervalId")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset?>("OpenedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("OrderTypeId")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal>("Quantity")
-                        .HasPrecision(28, 10)
-                        .HasColumnType("numeric(28,10)");
-
-                    b.Property<decimal?>("RequestedPrice")
-                        .HasPrecision(28, 10)
-                        .HasColumnType("numeric(28,10)");
-
-                    b.Property<int>("SideId")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("StatusId")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal?>("StopLoss")
-                        .HasPrecision(28, 10)
-                        .HasColumnType("numeric(28,10)");
-
-                    b.Property<int>("SymbolId")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal?>("TakeProfit")
-                        .HasPrecision(28, 10)
-                        .HasColumnType("numeric(28,10)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CloseReasonId");
-
-                    b.HasIndex("IntervalId");
-
-                    b.HasIndex("OrderTypeId");
-
-                    b.HasIndex("SideId");
-
-                    b.HasIndex("StatusId");
-
-                    b.HasIndex("SymbolId", "StatusId");
-
-                    b.ToTable("trades");
-                });
-
             modelBuilder.Entity("TraderAlgoApi.Models.KlineData", b =>
                 {
                     b.HasOne("TraderAlgoApi.Models.Interval", "Interval")
@@ -545,28 +288,6 @@ namespace TraderAlgoApi.Migrations
                     b.Navigation("Interval");
 
                     b.Navigation("Symbol");
-                });
-
-            modelBuilder.Entity("TraderAlgoApi.Models.Macd", b =>
-                {
-                    b.HasOne("TraderAlgoApi.Models.KlineData", "KlineData")
-                        .WithOne("Macd")
-                        .HasForeignKey("TraderAlgoApi.Models.Macd", "KlineDataId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("KlineData");
-                });
-
-            modelBuilder.Entity("TraderAlgoApi.Models.RelativeStrengthIndex", b =>
-                {
-                    b.HasOne("TraderAlgoApi.Models.KlineData", "KlineData")
-                        .WithOne("RelativeStrengthIndex")
-                        .HasForeignKey("TraderAlgoApi.Models.RelativeStrengthIndex", "KlineDataId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("KlineData");
                 });
 
             modelBuilder.Entity("TraderAlgoApi.Models.SimpleMovingAverage", b =>
@@ -580,55 +301,6 @@ namespace TraderAlgoApi.Migrations
                     b.Navigation("KlineData");
                 });
 
-            modelBuilder.Entity("TraderAlgoApi.Models.Trade", b =>
-                {
-                    b.HasOne("TraderAlgoApi.Models.Lookups.TradeCloseReason", "CloseReason")
-                        .WithMany()
-                        .HasForeignKey("CloseReasonId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
-                    b.HasOne("TraderAlgoApi.Models.Interval", "Interval")
-                        .WithMany()
-                        .HasForeignKey("IntervalId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
-                    b.HasOne("TraderAlgoApi.Models.Lookups.TradeOrderType", "OrderType")
-                        .WithMany()
-                        .HasForeignKey("OrderTypeId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("TraderAlgoApi.Models.Lookups.TradeSide", "Side")
-                        .WithMany()
-                        .HasForeignKey("SideId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("TraderAlgoApi.Models.Lookups.TradeStatus", "Status")
-                        .WithMany()
-                        .HasForeignKey("StatusId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("TraderAlgoApi.Models.Symbol", "Symbol")
-                        .WithMany()
-                        .HasForeignKey("SymbolId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("CloseReason");
-
-                    b.Navigation("Interval");
-
-                    b.Navigation("OrderType");
-
-                    b.Navigation("Side");
-
-                    b.Navigation("Status");
-
-                    b.Navigation("Symbol");
-                });
-
             modelBuilder.Entity("TraderAlgoApi.Models.Interval", b =>
                 {
                     b.Navigation("Klines");
@@ -636,10 +308,6 @@ namespace TraderAlgoApi.Migrations
 
             modelBuilder.Entity("TraderAlgoApi.Models.KlineData", b =>
                 {
-                    b.Navigation("Macd");
-
-                    b.Navigation("RelativeStrengthIndex");
-
                     b.Navigation("SimpleMovingAverage");
                 });
 

@@ -56,4 +56,10 @@ public sealed class KlineData
 
     [ForeignKey(nameof(IntervalId))]
     public Interval Interval { get; set; } = null!;
+
+    public SimpleMovingAverage? SimpleMovingAverage { get; set; }
+
+    public RelativeStrengthIndex? RelativeStrengthIndex { get; set; }
+
+    public Macd? Macd { get; set; }
 }

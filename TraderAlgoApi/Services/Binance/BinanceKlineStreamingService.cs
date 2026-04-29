@@ -2,6 +2,7 @@ using System.Net.WebSockets;
 using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
 using TraderAlgoApi.Models;
+using TraderAlgoApi.Services.Indicators;
 using TraderAlgoApi.Services.PriceFeeds;
 
 namespace TraderAlgoApi.Services.Binance;
@@ -59,6 +60,7 @@ public sealed class BinanceKlineStreamingService(
 
         await using var scope = scopeFactory.CreateAsyncScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var indicatorSyncService = scope.ServiceProvider.GetRequiredService<IIndicatorSyncService>();
 
         var symbolEntity = await dbContext.Symbols
             .SingleOrDefaultAsync(s => s.Code == symbol, stoppingToken);
@@ -88,12 +90,13 @@ public sealed class BinanceKlineStreamingService(
             if (!kline.IsClosed)
                 continue;
 
-            await PersistKlineAsync(dbContext, kline, symbolEntity.Id, intervalEntity.Id, stoppingToken);
+            await PersistKlineAsync(dbContext, indicatorSyncService, kline, symbolEntity.Id, intervalEntity.Id, stoppingToken);
         }
     }
 
     private async Task PersistKlineAsync(
         ApplicationDbContext dbContext,
+        IIndicatorSyncService indicatorSyncService,
         BinanceKlineStream kline,
         int symbolId,
         int intervalId,
@@ -138,6 +141,9 @@ public sealed class BinanceKlineStreamingService(
         }
 
         await dbContext.SaveChangesAsync(cancellationToken);
+
+        await indicatorSyncService.ComputeAndSaveAsync(
+            symbolId, intervalId, kline.OpenTime, kline.OpenTime, cancellationToken);
 
         logger.LogInformation(
             "Stored closed kline {Symbol}/{Interval} {OpenTime}",
