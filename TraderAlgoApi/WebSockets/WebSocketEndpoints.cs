@@ -1,4 +1,5 @@
 using TraderAlgoApi.Services.Charts;
+using TraderAlgoApi.Services.TradeEvents;
 
 namespace TraderAlgoApi.WebSockets;
 
@@ -25,6 +26,16 @@ internal static class WebSocketEndpoints
             CancellationToken cancellationToken) =>
         {
             await liveChartDataService.StreamCandlesWithIndicatorsAsync(context, symbol, interval, cancellationToken);
+        })
+        .ExcludeFromDescription();
+
+        app.MapGet("/ws/tradebots/events", async (
+            HttpContext context,
+            long? tradingAccountId,
+            ITradeEventStreamService tradeEventStreamService,
+            CancellationToken cancellationToken) =>
+        {
+            await tradeEventStreamService.StreamAsync(context, tradingAccountId, cancellationToken);
         })
         .ExcludeFromDescription();
     }

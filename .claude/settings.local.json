@@ -1,7 +1,17 @@
 {
   "permissions": {
     "allow": [
-      "Bash(gh pr create --title 'Add IntervalsController with GET active intervals endpoint' --body ' *)"
+      "Bash(gh pr create --title 'Add IntervalsController with GET active intervals endpoint' --body ' *)",
+      "Bash(dotnet build *)",
+      "Bash(dotnet ef *)",
+      "Bash(dotnet test *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(git fetch *)",
+      "Bash(git checkout *)",
+      "Bash(git pull *)",
+      "Bash(git merge *)"
     ]
   }
 }

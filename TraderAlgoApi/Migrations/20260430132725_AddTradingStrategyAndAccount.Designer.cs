@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using TraderAlgoApi.Data;
@@ -11,9 +12,11 @@ using TraderAlgoApi.Data;
 namespace TraderAlgoApi.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260430132725_AddTradingStrategyAndAccount")]
+    partial class AddTradingStrategyAndAccount
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -222,11 +225,6 @@ namespace TraderAlgoApi.Migrations
                         {
                             Id = 3,
                             Name = "TakeProfit"
-                        },
-                        new
-                        {
-                            Id = 4,
-                            Name = "BotSignal"
                         });
                 });
 
@@ -577,59 +575,6 @@ namespace TraderAlgoApi.Migrations
                     b.ToTable("trades");
                 });
 
-            modelBuilder.Entity("TraderAlgoApi.Models.TradeBot", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("IntervalId")
-                        .HasColumnType("integer");
-
-                    b.Property<bool>("IsEnabled")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTimeOffset?>("LastSignalAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<decimal>("Quantity")
-                        .HasPrecision(28, 10)
-                        .HasColumnType("numeric(28,10)");
-
-                    b.Property<decimal?>("StopLoss")
-                        .HasPrecision(28, 10)
-                        .HasColumnType("numeric(28,10)");
-
-                    b.Property<int>("SymbolId")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal?>("TakeProfit")
-                        .HasPrecision(28, 10)
-                        .HasColumnType("numeric(28,10)");
-
-                    b.Property<long>("TradingAccountId")
-                        .HasColumnType("bigint");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("IntervalId");
-
-                    b.HasIndex("SymbolId");
-
-                    b.HasIndex("TradingAccountId")
-                        .IsUnique();
-
-                    b.ToTable("trade_bots");
-                });
-
             modelBuilder.Entity("TraderAlgoApi.Models.TradingAccount", b =>
                 {
                     b.Property<long>("Id")
@@ -641,21 +586,16 @@ namespace TraderAlgoApi.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<decimal>("CurrentBalance")
-                        .HasPrecision(28, 10)
-                        .HasColumnType("numeric(28,10)");
-
-                    b.Property<decimal>("InitialBalance")
+                    b.Property<decimal>("CurrentAmount")
                         .HasPrecision(28, 10)
                         .HasColumnType("numeric(28,10)");
 
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean");
 
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
+                    b.Property<decimal>("StartingAmount")
+                        .HasPrecision(28, 10)
+                        .HasColumnType("numeric(28,10)");
 
                     b.Property<int>("TradingStrategyId")
                         .HasColumnType("integer");
@@ -665,18 +605,6 @@ namespace TraderAlgoApi.Migrations
                     b.HasIndex("TradingStrategyId");
 
                     b.ToTable("trading_accounts");
-
-                    b.HasData(
-                        new
-                        {
-                            Id = 1L,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 4, 30, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            CurrentBalance = 1000m,
-                            InitialBalance = 1000m,
-                            IsActive = true,
-                            Name = "Default",
-                            TradingStrategyId = 1
-                        });
                 });
 
             modelBuilder.Entity("TraderAlgoApi.Models.KlineData", b =>
@@ -787,33 +715,6 @@ namespace TraderAlgoApi.Migrations
                     b.Navigation("TradingAccount");
                 });
 
-            modelBuilder.Entity("TraderAlgoApi.Models.TradeBot", b =>
-                {
-                    b.HasOne("TraderAlgoApi.Models.Interval", "Interval")
-                        .WithMany()
-                        .HasForeignKey("IntervalId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("TraderAlgoApi.Models.Symbol", "Symbol")
-                        .WithMany()
-                        .HasForeignKey("SymbolId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("TraderAlgoApi.Models.TradingAccount", "TradingAccount")
-                        .WithOne("TradeBot")
-                        .HasForeignKey("TraderAlgoApi.Models.TradeBot", "TradingAccountId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Interval");
-
-                    b.Navigation("Symbol");
-
-                    b.Navigation("TradingAccount");
-                });
-
             modelBuilder.Entity("TraderAlgoApi.Models.TradingAccount", b =>
                 {
                     b.HasOne("TraderAlgoApi.Models.Lookups.TradingStrategy", "TradingStrategy")
@@ -846,8 +747,6 @@ namespace TraderAlgoApi.Migrations
 
             modelBuilder.Entity("TraderAlgoApi.Models.TradingAccount", b =>
                 {
-                    b.Navigation("TradeBot");
-
                     b.Navigation("Trades");
                 });
 #pragma warning restore 612, 618

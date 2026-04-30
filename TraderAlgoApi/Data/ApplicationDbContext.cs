@@ -10,6 +10,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<Interval>  Intervals => Set<Interval>();
     public DbSet<KlineData> KlineData => Set<KlineData>();
     public DbSet<Trade>     Trades    => Set<Trade>();
+    public DbSet<TradeBot>  TradeBots => Set<TradeBot>();
 
     public DbSet<TradeSide>       TradeSides       => Set<TradeSide>();
     public DbSet<TradeOrderType>  TradeOrderTypes  => Set<TradeOrderType>();
@@ -21,6 +22,9 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<RelativeStrengthIndex> RelativeStrengthIndexes => Set<RelativeStrengthIndex>();
 
     public DbSet<Macd> Macd => Set<Macd>();
+
+    public DbSet<TradingStrategy>  TradingStrategies  => Set<TradingStrategy>();
+    public DbSet<TradingAccount>   TradingAccounts    => Set<TradingAccount>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -100,7 +104,8 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         modelBuilder.Entity<TradeCloseReason>().HasData(
             new TradeCloseReason { Id = 1, Name = "Manual"     },
             new TradeCloseReason { Id = 2, Name = "StopLoss"   },
-            new TradeCloseReason { Id = 3, Name = "TakeProfit" });
+            new TradeCloseReason { Id = 3, Name = "TakeProfit" },
+            new TradeCloseReason { Id = 4, Name = "BotSignal"  });
 
         // -------------------------------------------------------------------
         // Trades — FK relationships to lookup tables, composite index
@@ -138,6 +143,70 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
                 .OnDelete(DeleteBehavior.Restrict);
 
             entity.HasIndex(t => new { t.SymbolId, t.StatusId });
+        });
+
+        // -------------------------------------------------------------------
+        // TradingStrategy — IDs match the C# enum values
+        // -------------------------------------------------------------------
+        modelBuilder.Entity<TradingStrategy>().HasData(
+            new TradingStrategy { Id = 1, Name = "SMA"  },
+            new TradingStrategy { Id = 2, Name = "RSI"  },
+            new TradingStrategy { Id = 3, Name = "MACD" });
+
+        // -------------------------------------------------------------------
+        // TradingAccounts
+        // -------------------------------------------------------------------
+        modelBuilder.Entity<TradingAccount>(entity =>
+        {
+            entity.HasOne(a => a.TradingStrategy)
+                .WithMany()
+                .HasForeignKey(a => a.TradingStrategyId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasData(new TradingAccount
+            {
+                Id                = 1,
+                Name              = "Default",
+                InitialBalance    = 1000m,
+                CurrentBalance    = 1000m,
+                TradingStrategyId = 1,
+                IsActive          = true,
+                CreatedAt         = new DateTimeOffset(2026, 4, 30, 0, 0, 0, TimeSpan.Zero)
+            });
+        });
+
+        // -------------------------------------------------------------------
+        // Trade — TradingAccount FK (nullable, restrict)
+        // -------------------------------------------------------------------
+        modelBuilder.Entity<Trade>(entity =>
+        {
+            entity.HasOne(t => t.TradingAccount)
+                .WithMany(a => a.Trades)
+                .HasForeignKey(t => t.TradingAccountId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // -------------------------------------------------------------------
+        // TradeBots
+        // -------------------------------------------------------------------
+        modelBuilder.Entity<TradeBot>(entity =>
+        {
+            entity.HasIndex(b => b.TradingAccountId).IsUnique();
+
+            entity.HasOne(b => b.TradingAccount)
+                .WithOne(a => a.TradeBot)
+                .HasForeignKey<TradeBot>(b => b.TradingAccountId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(b => b.Symbol)
+                .WithMany()
+                .HasForeignKey(b => b.SymbolId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(b => b.Interval)
+                .WithMany()
+                .HasForeignKey(b => b.IntervalId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<SimpleMovingAverage>(entity =>

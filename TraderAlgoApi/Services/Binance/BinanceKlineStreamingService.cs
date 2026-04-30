@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
 using TraderAlgoApi.Models;
 using TraderAlgoApi.Services.Indicators;
+using TraderAlgoApi.Services.MarketData;
 using TraderAlgoApi.Services.PriceFeeds;
 
 namespace TraderAlgoApi.Services.Binance;
@@ -11,6 +12,7 @@ public sealed class BinanceKlineStreamingService(
     IServiceScopeFactory scopeFactory,
     IConfiguration configuration,
     PriceFeed priceFeed,
+    ClosedCandleFeed closedCandleFeed,
     ILogger<BinanceKlineStreamingService> logger) : BackgroundService
 {
     private const string DefaultWebSocketBaseUrl = "wss://stream.binance.com:443";
@@ -144,6 +146,12 @@ public sealed class BinanceKlineStreamingService(
 
         await indicatorSyncService.ComputeAndSaveAsync(
             symbolId, intervalId, kline.OpenTime, kline.OpenTime, cancellationToken);
+
+        closedCandleFeed.Publish(new ClosedCandleEvent(
+            Symbol: kline.Symbol,
+            Interval: kline.Interval,
+            OpenTime: kline.OpenTime,
+            Close: kline.Close));
 
         logger.LogInformation(
             "Stored closed kline {Symbol}/{Interval} {OpenTime}",
