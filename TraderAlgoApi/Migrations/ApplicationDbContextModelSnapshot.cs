@@ -22,6 +22,81 @@ namespace TraderAlgoApi.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("TraderAlgoApi.Models.Backtest", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<int>("CandleCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<decimal?>("FinalBalance")
+                        .HasPrecision(28, 10)
+                        .HasColumnType("numeric(28,10)");
+
+                    b.Property<DateTimeOffset>("From")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<decimal>("InitialBalance")
+                        .HasPrecision(28, 10)
+                        .HasColumnType("numeric(28,10)");
+
+                    b.Property<int>("IntervalId")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal?>("Pnl")
+                        .HasPrecision(28, 10)
+                        .HasColumnType("numeric(28,10)");
+
+                    b.Property<decimal>("Quantity")
+                        .HasPrecision(28, 10)
+                        .HasColumnType("numeric(28,10)");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal?>("StopLoss")
+                        .HasPrecision(28, 10)
+                        .HasColumnType("numeric(28,10)");
+
+                    b.Property<int>("SymbolId")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal?>("TakeProfit")
+                        .HasPrecision(28, 10)
+                        .HasColumnType("numeric(28,10)");
+
+                    b.Property<DateTimeOffset>("To")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<long?>("TradeBotId")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("TradingStrategyId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IntervalId");
+
+                    b.HasIndex("SymbolId");
+
+                    b.HasIndex("TradeBotId");
+
+                    b.HasIndex("TradingStrategyId");
+
+                    b.ToTable("backtests");
+                });
+
             modelBuilder.Entity("TraderAlgoApi.Models.Interval", b =>
                 {
                     b.Property<int>("Id")
@@ -222,6 +297,11 @@ namespace TraderAlgoApi.Migrations
                         {
                             Id = 3,
                             Name = "TakeProfit"
+                        },
+                        new
+                        {
+                            Id = 4,
+                            Name = "BotSignal"
                         });
                 });
 
@@ -322,6 +402,41 @@ namespace TraderAlgoApi.Migrations
                         {
                             Id = 4,
                             Name = "Cancelled"
+                        });
+                });
+
+            modelBuilder.Entity("TraderAlgoApi.Models.Lookups.TradingStrategy", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("trading_strategies");
+
+                    b.HasData(
+                        new
+                        {
+                            Id = 1,
+                            Name = "SMA"
+                        },
+                        new
+                        {
+                            Id = 2,
+                            Name = "RSI"
+                        },
+                        new
+                        {
+                            Id = 3,
+                            Name = "MACD"
                         });
                 });
 
@@ -460,6 +575,9 @@ namespace TraderAlgoApi.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
 
+                    b.Property<long?>("BacktestId")
+                        .HasColumnType("bigint");
+
                     b.Property<int?>("CloseReasonId")
                         .HasColumnType("integer");
 
@@ -515,7 +633,12 @@ namespace TraderAlgoApi.Migrations
                         .HasPrecision(28, 10)
                         .HasColumnType("numeric(28,10)");
 
+                    b.Property<long?>("TradingAccountId")
+                        .HasColumnType("bigint");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("BacktestId");
 
                     b.HasIndex("CloseReasonId");
 
@@ -527,9 +650,147 @@ namespace TraderAlgoApi.Migrations
 
                     b.HasIndex("StatusId");
 
+                    b.HasIndex("TradingAccountId");
+
                     b.HasIndex("SymbolId", "StatusId");
 
                     b.ToTable("trades");
+                });
+
+            modelBuilder.Entity("TraderAlgoApi.Models.TradeBot", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("IntervalId")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTimeOffset?>("LastSignalAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<decimal>("Quantity")
+                        .HasPrecision(28, 10)
+                        .HasColumnType("numeric(28,10)");
+
+                    b.Property<decimal?>("StopLoss")
+                        .HasPrecision(28, 10)
+                        .HasColumnType("numeric(28,10)");
+
+                    b.Property<int>("SymbolId")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal?>("TakeProfit")
+                        .HasPrecision(28, 10)
+                        .HasColumnType("numeric(28,10)");
+
+                    b.Property<long>("TradingAccountId")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IntervalId");
+
+                    b.HasIndex("SymbolId");
+
+                    b.HasIndex("TradingAccountId")
+                        .IsUnique();
+
+                    b.ToTable("trade_bots");
+                });
+
+            modelBuilder.Entity("TraderAlgoApi.Models.TradingAccount", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<decimal>("CurrentBalance")
+                        .HasPrecision(28, 10)
+                        .HasColumnType("numeric(28,10)");
+
+                    b.Property<decimal>("InitialBalance")
+                        .HasPrecision(28, 10)
+                        .HasColumnType("numeric(28,10)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<int>("TradingStrategyId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TradingStrategyId");
+
+                    b.ToTable("trading_accounts");
+
+                    b.HasData(
+                        new
+                        {
+                            Id = 1L,
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 4, 30, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                            CurrentBalance = 1000m,
+                            InitialBalance = 1000m,
+                            IsActive = true,
+                            Name = "Default",
+                            TradingStrategyId = 1
+                        });
+                });
+
+            modelBuilder.Entity("TraderAlgoApi.Models.Backtest", b =>
+                {
+                    b.HasOne("TraderAlgoApi.Models.Interval", "Interval")
+                        .WithMany()
+                        .HasForeignKey("IntervalId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TraderAlgoApi.Models.Symbol", "Symbol")
+                        .WithMany()
+                        .HasForeignKey("SymbolId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TraderAlgoApi.Models.TradeBot", "TradeBot")
+                        .WithMany()
+                        .HasForeignKey("TradeBotId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("TraderAlgoApi.Models.Lookups.TradingStrategy", "TradingStrategy")
+                        .WithMany()
+                        .HasForeignKey("TradingStrategyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Interval");
+
+                    b.Navigation("Symbol");
+
+                    b.Navigation("TradeBot");
+
+                    b.Navigation("TradingStrategy");
                 });
 
             modelBuilder.Entity("TraderAlgoApi.Models.KlineData", b =>
@@ -586,6 +847,11 @@ namespace TraderAlgoApi.Migrations
 
             modelBuilder.Entity("TraderAlgoApi.Models.Trade", b =>
                 {
+                    b.HasOne("TraderAlgoApi.Models.Backtest", "Backtest")
+                        .WithMany("Trades")
+                        .HasForeignKey("BacktestId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("TraderAlgoApi.Models.Lookups.TradeCloseReason", "CloseReason")
                         .WithMany()
                         .HasForeignKey("CloseReasonId")
@@ -620,6 +886,13 @@ namespace TraderAlgoApi.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("TraderAlgoApi.Models.TradingAccount", "TradingAccount")
+                        .WithMany("Trades")
+                        .HasForeignKey("TradingAccountId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Backtest");
+
                     b.Navigation("CloseReason");
 
                     b.Navigation("Interval");
@@ -631,6 +904,51 @@ namespace TraderAlgoApi.Migrations
                     b.Navigation("Status");
 
                     b.Navigation("Symbol");
+
+                    b.Navigation("TradingAccount");
+                });
+
+            modelBuilder.Entity("TraderAlgoApi.Models.TradeBot", b =>
+                {
+                    b.HasOne("TraderAlgoApi.Models.Interval", "Interval")
+                        .WithMany()
+                        .HasForeignKey("IntervalId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TraderAlgoApi.Models.Symbol", "Symbol")
+                        .WithMany()
+                        .HasForeignKey("SymbolId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TraderAlgoApi.Models.TradingAccount", "TradingAccount")
+                        .WithOne("TradeBot")
+                        .HasForeignKey("TraderAlgoApi.Models.TradeBot", "TradingAccountId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Interval");
+
+                    b.Navigation("Symbol");
+
+                    b.Navigation("TradingAccount");
+                });
+
+            modelBuilder.Entity("TraderAlgoApi.Models.TradingAccount", b =>
+                {
+                    b.HasOne("TraderAlgoApi.Models.Lookups.TradingStrategy", "TradingStrategy")
+                        .WithMany()
+                        .HasForeignKey("TradingStrategyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("TradingStrategy");
+                });
+
+            modelBuilder.Entity("TraderAlgoApi.Models.Backtest", b =>
+                {
+                    b.Navigation("Trades");
                 });
 
             modelBuilder.Entity("TraderAlgoApi.Models.Interval", b =>
@@ -650,6 +968,13 @@ namespace TraderAlgoApi.Migrations
             modelBuilder.Entity("TraderAlgoApi.Models.Symbol", b =>
                 {
                     b.Navigation("Klines");
+                });
+
+            modelBuilder.Entity("TraderAlgoApi.Models.TradingAccount", b =>
+                {
+                    b.Navigation("TradeBot");
+
+                    b.Navigation("Trades");
                 });
 #pragma warning restore 612, 618
         }

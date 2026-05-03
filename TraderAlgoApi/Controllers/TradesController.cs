@@ -16,7 +16,7 @@ public sealed class TradesController(ITradeService tradeService) : ControllerBas
         try
         {
             var trade = await tradeService.CreateAsync(request, cancellationToken);
-            return CreatedAtAction(nameof(GetActive), new { symbol = trade.SymbolCode }, trade);
+            return CreatedAtAction(nameof(GetActive), new { tradingAccountId = trade.TradingAccountId }, trade);
         }
         catch (ArgumentException ex)      { return BadRequest(ex.Message); }
         catch (InvalidOperationException ex) { return Conflict(ex.Message); }
@@ -51,23 +51,23 @@ public sealed class TradesController(ITradeService tradeService) : ControllerBas
 
     [HttpGet("active")]
     public async Task<ActionResult<IReadOnlyList<TradeResponseDto>>> GetActive(
-        [FromQuery] string symbol,
+        [FromQuery] long tradingAccountId,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(symbol))
-            return BadRequest("symbol is required.");
+        if (tradingAccountId <= 0)
+            return BadRequest("tradingAccountId is required.");
 
-        return Ok(await tradeService.GetActiveAsync(symbol, cancellationToken));
+        return Ok(await tradeService.GetActiveAsync(tradingAccountId, cancellationToken));
     }
 
     [HttpGet("history")]
     public async Task<ActionResult<IReadOnlyList<TradeResponseDto>>> GetHistory(
-        [FromQuery] string symbol,
+        [FromQuery] long tradingAccountId,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(symbol))
-            return BadRequest("symbol is required.");
+        if (tradingAccountId <= 0)
+            return BadRequest("tradingAccountId is required.");
 
-        return Ok(await tradeService.GetHistoryAsync(symbol, cancellationToken));
+        return Ok(await tradeService.GetHistoryAsync(tradingAccountId, cancellationToken));
     }
 }

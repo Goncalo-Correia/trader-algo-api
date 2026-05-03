@@ -38,6 +38,8 @@ public sealed class RulesController(
             IsSma20AboveSma100: smaRule.IsSma20AboveSma100(context),
             IsSma20BelowSma100: smaRule.IsSma20BelowSma100(context),
             IsPriceRetestingSma20: smaRule.IsPriceRetestingSma20(context),
+            LastThreeCandlesAboveSma20: smaRule.LastThreeCandlesAboveSma20(context),
+            LastThreeCandlesBelowSma20: smaRule.LastThreeCandlesBelowSma20(context),
             ShouldEnterLong: smaRule.ShouldEnterLong(context),
             ShouldEnterShort: smaRule.ShouldEnterShort(context)));
     }

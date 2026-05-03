@@ -72,4 +72,14 @@ public sealed class Trade
 
     [ForeignKey(nameof(CloseReasonId))]
     public TradeCloseReason? CloseReason { get; set; }
+
+    public long? TradingAccountId { get; set; }
+
+    [ForeignKey(nameof(TradingAccountId))]
+    public TradingAccount? TradingAccount { get; set; }
+
+    public long? BacktestId { get; set; }
+
+    [ForeignKey(nameof(BacktestId))]
+    public Backtest? Backtest { get; set; }
 }

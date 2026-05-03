@@ -1,9 +1,11 @@
 using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
 using TraderAlgoApi.Dtos.Trades;
+using TraderAlgoApi.Dtos.TradeEvents;
 using TraderAlgoApi.Models;
 using TraderAlgoApi.Models.Enums;
 using TraderAlgoApi.Services.PriceFeeds;
+using TraderAlgoApi.Services.TradeEvents;
 
 namespace TraderAlgoApi.Services.Trades;
 
@@ -11,6 +13,7 @@ public sealed class TradeService(
     ApplicationDbContext dbContext,
     PriceFeed priceFeed,
     TimeProvider timeProvider,
+    ITradeEventPublisher tradeEventPublisher,
     ILogger<TradeService> logger) : ITradeService
 {
     public async Task<TradeResponseDto> CreateAsync(
@@ -25,22 +28,38 @@ public sealed class TradeService(
             ?? throw new ArgumentException($"Symbol '{request.SymbolCode}' not found.");
 
         int? intervalId = null;
+        Interval? intervalEntity = null;
         if (request.IntervalCode is not null)
         {
-            var interval = await dbContext.Intervals
+            intervalEntity = await dbContext.Intervals
                 .FirstOrDefaultAsync(i => i.Code == request.IntervalCode, cancellationToken)
                 ?? throw new ArgumentException($"Interval '{request.IntervalCode}' not found.");
-            intervalId = interval.Id;
+            intervalId = intervalEntity.Id;
         }
 
-        var hasOpen = await dbContext.Trades.AnyAsync(
-            t => t.SymbolId == symbol.Id &&
-                 (t.StatusId == (int)TradeStatus.Pending || t.StatusId == (int)TradeStatus.Active),
-            cancellationToken);
+        if (request.TradingAccountId is long requestedAccountId)
+        {
+            var account = await dbContext.TradingAccounts
+                .FirstOrDefaultAsync(a => a.Id == requestedAccountId, cancellationToken)
+                ?? throw new ArgumentException($"Trading account {requestedAccountId} not found.");
+
+            if (!account.IsActive)
+                throw new ArgumentException($"Trading account {requestedAccountId} is not active.");
+        }
+
+        var openTrades = dbContext.Trades
+            .Where(t => t.BacktestId == null &&
+                        (t.StatusId == (int)TradeStatus.Pending || t.StatusId == (int)TradeStatus.Active));
+
+        var hasOpen = request.TradingAccountId is long openAccountId
+            ? await openTrades.AnyAsync(t => t.TradingAccountId == openAccountId, cancellationToken)
+            : await openTrades.AnyAsync(t => t.SymbolId == symbol.Id, cancellationToken);
 
         if (hasOpen)
             throw new InvalidOperationException(
-                $"A pending or active trade already exists for {request.SymbolCode}. Close it before opening a new one.");
+                request.TradingAccountId is long blockedAccountId
+                    ? $"A pending or active trade already exists for trading account {blockedAccountId}. Close it before opening a new one."
+                    : $"A pending or active trade already exists for {request.SymbolCode}. Close it before opening a new one.");
 
         var now = timeProvider.GetUtcNow();
         Trade trade;
@@ -51,51 +70,70 @@ public sealed class TradeService(
 
             trade = new Trade
             {
-                SymbolId       = symbol.Id,
-                IntervalId     = intervalId,
-                SideId         = (int)request.Side,
-                OrderTypeId    = (int)TradeOrderType.Market,
-                Quantity       = request.Quantity,
-                RequestedPrice = null,
-                EntryPrice     = price,
-                StopLoss       = request.StopLoss,
-                TakeProfit     = request.TakeProfit,
-                StatusId       = (int)TradeStatus.Active,
-                CreatedAt      = now,
-                OpenedAt       = now
+                SymbolId         = symbol.Id,
+                Symbol           = symbol,
+                IntervalId       = intervalId,
+                Interval         = intervalEntity,
+                SideId           = (int)request.Side,
+                OrderTypeId      = (int)TradeOrderType.Market,
+                Quantity         = request.Quantity,
+                RequestedPrice   = null,
+                EntryPrice       = price,
+                StopLoss         = request.StopLoss,
+                TakeProfit       = request.TakeProfit,
+                StatusId         = (int)TradeStatus.Active,
+                CreatedAt        = now,
+                OpenedAt         = now,
+                TradingAccountId = request.TradingAccountId
             };
         }
         else
         {
             trade = new Trade
             {
-                SymbolId       = symbol.Id,
-                IntervalId     = intervalId,
-                SideId         = (int)request.Side,
-                OrderTypeId    = (int)TradeOrderType.Limit,
-                Quantity       = request.Quantity,
-                RequestedPrice = request.LimitPrice,
-                EntryPrice     = null,
-                StopLoss       = request.StopLoss,
-                TakeProfit     = request.TakeProfit,
-                StatusId       = (int)TradeStatus.Pending,
-                CreatedAt      = now
+                SymbolId         = symbol.Id,
+                Symbol           = symbol,
+                IntervalId       = intervalId,
+                Interval         = intervalEntity,
+                SideId           = (int)request.Side,
+                OrderTypeId      = (int)TradeOrderType.Limit,
+                Quantity         = request.Quantity,
+                RequestedPrice   = request.LimitPrice,
+                EntryPrice       = null,
+                StopLoss         = request.StopLoss,
+                TakeProfit       = request.TakeProfit,
+                StatusId         = (int)TradeStatus.Pending,
+                CreatedAt        = now,
+                TradingAccountId = request.TradingAccountId
             };
         }
 
         dbContext.Trades.Add(trade);
         await dbContext.SaveChangesAsync(cancellationToken);
 
-        // EF's change tracker has symbol (and interval if set) in scope, so
-        // relationship fixup populates the navigation properties after save.
         logger.LogInformation(
-            "Trade {Id} created: {Symbol} {Side} {OrderType} qty={Quantity}",
-            trade.Id, symbol.Code, (TradeSide)trade.SideId, (TradeOrderType)trade.OrderTypeId, trade.Quantity);
+            "Trade {Id} created: {Symbol} {Side} {OrderType} qty={Quantity} accountId={AccountId}",
+            trade.Id, symbol.Code, (TradeSide)trade.SideId, (TradeOrderType)trade.OrderTypeId,
+            trade.Quantity, trade.TradingAccountId);
 
-        return ToDto(trade);
+        var dto = ToDto(trade);
+        PublishTradeEvent(
+            dto.Status == TradeStatus.Active ? "TradeOpened" : "TradePending",
+            dto,
+            dto.Status == TradeStatus.Active ? "Trade opened." : "Trade pending.");
+
+        return dto;
     }
 
     public async Task<TradeResponseDto> StopAsync(long id, CancellationToken cancellationToken = default)
+    {
+        return await CloseAsync(id, TradeCloseReason.Manual, cancellationToken);
+    }
+
+    public async Task<TradeResponseDto> CloseAsync(
+        long id,
+        TradeCloseReason closeReason,
+        CancellationToken cancellationToken = default)
     {
         var trade = await TradeWithNavigations()
             .FirstOrDefaultAsync(t => t.Id == id, cancellationToken)
@@ -111,14 +149,20 @@ public sealed class TradeService(
         trade.StatusId      = (int)TradeStatus.Closed;
         trade.ClosedAt      = now;
         trade.ClosedPrice   = price;
-        trade.CloseReasonId = (int)TradeCloseReason.Manual;
+        trade.CloseReasonId = (int)closeReason;
         trade.Pnl           = CalculatePnl(trade, price);
 
+        await ApplyPnlToAccountAsync(trade, cancellationToken);
         await dbContext.SaveChangesAsync(cancellationToken);
 
-        logger.LogInformation("Trade {Id} closed manually at {Price} pnl={Pnl}", id, price, trade.Pnl);
+        logger.LogInformation("Trade {Id} closed with {Reason} at {Price} pnl={Pnl}", id, closeReason, price, trade.Pnl);
 
-        return ToDto(trade);
+        var dto = ToDto(trade);
+        PublishTradeEvent("TradeClosed", dto, closeReason == TradeCloseReason.BotSignal
+            ? "Trade closed by tradebot signal."
+            : "Trade closed manually.");
+
+        return dto;
     }
 
     public async Task<TradeResponseDto> UpdateAsync(
@@ -143,12 +187,13 @@ public sealed class TradeService(
     }
 
     public async Task<IReadOnlyList<TradeResponseDto>> GetActiveAsync(
-        string symbol,
+        long tradingAccountId,
         CancellationToken cancellationToken = default)
     {
         var trades = await TradeWithNavigations()
             .AsNoTracking()
-            .Where(t => t.Symbol.Code == symbol &&
+            .Where(t => t.BacktestId == null &&
+                        t.TradingAccountId == tradingAccountId &&
                         (t.StatusId == (int)TradeStatus.Active || t.StatusId == (int)TradeStatus.Pending))
             .OrderByDescending(t => t.CreatedAt)
             .ToListAsync(cancellationToken);
@@ -157,12 +202,13 @@ public sealed class TradeService(
     }
 
     public async Task<IReadOnlyList<TradeResponseDto>> GetHistoryAsync(
-        string symbol,
+        long tradingAccountId,
         CancellationToken cancellationToken = default)
     {
         var trades = await TradeWithNavigations()
             .AsNoTracking()
-            .Where(t => t.Symbol.Code == symbol &&
+            .Where(t => t.BacktestId == null &&
+                        t.TradingAccountId == tradingAccountId &&
                         (t.StatusId == (int)TradeStatus.Closed || t.StatusId == (int)TradeStatus.Cancelled))
             .OrderByDescending(t => t.ClosedAt)
             .ToListAsync(cancellationToken);
@@ -177,7 +223,8 @@ public sealed class TradeService(
     {
         // No Include needed — ToDto is not called here.
         var trades = await dbContext.Trades
-            .Where(t => t.Symbol.Code == symbol &&
+            .Where(t => t.BacktestId == null &&
+                        t.Symbol.Code == symbol &&
                         (t.StatusId == (int)TradeStatus.Pending || t.StatusId == (int)TradeStatus.Active))
             .ToListAsync(cancellationToken);
 
@@ -186,16 +233,49 @@ public sealed class TradeService(
 
         var now     = timeProvider.GetUtcNow();
         var changed = false;
+        var tradeEvents = new List<(long TradeId, string Type, string Message)>();
 
         foreach (var trade in trades)
         {
-            changed |= trade.StatusId == (int)TradeStatus.Pending
+            var previousStatusId = trade.StatusId;
+            var wasChanged = previousStatusId == (int)TradeStatus.Pending
                 ? TryFillLimit(trade, price, now)
                 : TryTriggerSLTP(trade, price, now);
+
+            if (wasChanged && trade.StatusId == (int)TradeStatus.Closed)
+            {
+                await ApplyPnlToAccountAsync(trade, cancellationToken);
+                tradeEvents.Add((trade.Id, "TradeClosed", "Trade closed by price trigger."));
+            }
+
+            if (wasChanged &&
+                previousStatusId == (int)TradeStatus.Pending &&
+                trade.StatusId == (int)TradeStatus.Active)
+            {
+                tradeEvents.Add((trade.Id, "TradeOpened", "Pending trade filled."));
+            }
+
+            changed |= wasChanged;
         }
 
         if (changed)
+        {
             await dbContext.SaveChangesAsync(cancellationToken);
+
+            var changedIds = tradeEvents.Select(e => e.TradeId).Distinct().ToList();
+            var changedTrades = await TradeWithNavigations()
+                .AsNoTracking()
+                .Where(t => changedIds.Contains(t.Id))
+                .ToDictionaryAsync(t => t.Id, cancellationToken);
+
+            foreach (var tradeEvent in tradeEvents)
+            {
+                if (!changedTrades.TryGetValue(tradeEvent.TradeId, out var trade))
+                    continue;
+
+                PublishTradeEvent(tradeEvent.Type, ToDto(trade), tradeEvent.Message);
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -281,6 +361,25 @@ public sealed class TradeService(
         return true;
     }
 
+    /// <summary>Adds realized P&amp;L to the linked account's CurrentBalance, if any.</summary>
+    private async Task ApplyPnlToAccountAsync(Trade trade, CancellationToken cancellationToken)
+    {
+        if (trade.TradingAccountId is null || trade.Pnl is null)
+            return;
+
+        var account = await dbContext.TradingAccounts
+            .FirstOrDefaultAsync(a => a.Id == trade.TradingAccountId.Value, cancellationToken);
+
+        if (account is null)
+            return;
+
+        account.CurrentBalance += trade.Pnl.Value;
+
+        logger.LogInformation(
+            "Account {AccountId} CurrentBalance updated by {Pnl} → {CurrentBalance}",
+            account.Id, trade.Pnl.Value, account.CurrentBalance);
+    }
+
     private async Task<decimal> ResolveCurrentPriceAsync(string symbol, CancellationToken cancellationToken)
     {
         var live = priceFeed.GetLatestPrice(symbol);
@@ -313,24 +412,25 @@ public sealed class TradeService(
         }
 
         return new TradeResponseDto(
-            Id:             t.Id,
-            SymbolCode:     t.Symbol.Code,
-            IntervalCode:   t.Interval?.Code,
-            Side:           (TradeSide)t.SideId,
-            OrderType:      (TradeOrderType)t.OrderTypeId,
-            Quantity:       t.Quantity,
-            RequestedPrice: t.RequestedPrice,
-            EntryPrice:     t.EntryPrice,
-            StopLoss:       t.StopLoss,
-            TakeProfit:     t.TakeProfit,
-            Status:         (TradeStatus)t.StatusId,
-            CreatedAt:      t.CreatedAt.ToUnixTimeMilliseconds(),
-            OpenedAt:       t.OpenedAt?.ToUnixTimeMilliseconds(),
-            ClosedAt:       t.ClosedAt?.ToUnixTimeMilliseconds(),
-            ClosedPrice:    t.ClosedPrice,
-            CloseReason:    t.CloseReasonId is int id ? (TradeCloseReason)id : null,
-            Pnl:            t.Pnl,
-            UnrealizedPnl:  unrealizedPnl);
+            Id:               t.Id,
+            SymbolCode:       t.Symbol.Code,
+            IntervalCode:     t.Interval?.Code,
+            Side:             (TradeSide)t.SideId,
+            OrderType:        (TradeOrderType)t.OrderTypeId,
+            Quantity:         t.Quantity,
+            RequestedPrice:   t.RequestedPrice,
+            EntryPrice:       t.EntryPrice,
+            StopLoss:         t.StopLoss,
+            TakeProfit:       t.TakeProfit,
+            Status:           (TradeStatus)t.StatusId,
+            CreatedAt:        t.CreatedAt.ToUnixTimeMilliseconds(),
+            OpenedAt:         t.OpenedAt?.ToUnixTimeMilliseconds(),
+            ClosedAt:         t.ClosedAt?.ToUnixTimeMilliseconds(),
+            ClosedPrice:      t.ClosedPrice,
+            CloseReason:      t.CloseReasonId is int id ? (TradeCloseReason)id : null,
+            Pnl:              t.Pnl,
+            UnrealizedPnl:    unrealizedPnl,
+            TradingAccountId: t.TradingAccountId);
     }
 
     private static decimal? CalculatePnl(Trade trade, decimal closedPrice)
@@ -341,5 +441,17 @@ public sealed class TradeService(
         return trade.SideId == (int)TradeSide.Buy
             ? (closedPrice - trade.EntryPrice.Value) * trade.Quantity
             : (trade.EntryPrice.Value - closedPrice) * trade.Quantity;
+    }
+
+    private void PublishTradeEvent(string type, TradeResponseDto trade, string message)
+    {
+        tradeEventPublisher.Publish(new TradeEventDto(
+            Type: type,
+            TradingAccountId: trade.TradingAccountId,
+            TradeId: trade.Id,
+            SymbolCode: trade.SymbolCode,
+            Message: message,
+            CreatedAt: timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            Trade: trade));
     }
 }

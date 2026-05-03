@@ -13,4 +13,5 @@ public sealed record CreateTradeRequestDto(
     [Range(0.00000001, double.MaxValue, ErrorMessage = "LimitPrice must be greater than zero.")]
     decimal?                  LimitPrice,
     decimal?                  StopLoss,
-    decimal?                  TakeProfit);
+    decimal?                  TakeProfit,
+    long?                     TradingAccountId);

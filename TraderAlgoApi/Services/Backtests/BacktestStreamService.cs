@@ -1,0 +1,364 @@
+using System.Net.WebSockets;
+using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using TraderAlgoApi.Data;
+using TraderAlgoApi.Dtos.Charts;
+using TraderAlgoApi.Models;
+using TraderAlgoApi.Models.Enums;
+using TraderAlgoApi.Services.Rules;
+using TraderAlgoApi.Services.Rules.Macd;
+using TraderAlgoApi.Services.Rules.Rsi;
+using TraderAlgoApi.Services.Rules.Sma;
+
+namespace TraderAlgoApi.Services.Backtests;
+
+public sealed class BacktestStreamService(
+    ApplicationDbContext dbContext,
+    SmaTradingRule smaTradingRule,
+    RsiTradingRule rsiTradingRule,
+    MacdTradingRule macdTradingRule,
+    TimeProvider timeProvider,
+    ILogger<BacktestStreamService> logger) : IBacktestStreamService
+{
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly TimeSpan CandleInterval = TimeSpan.FromSeconds(5);
+
+    public async Task StreamAsync(
+        HttpContext context,
+        long backtestId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!context.WebSockets.IsWebSocketRequest)
+        {
+            context.Response.StatusCode = StatusCodes.Status426UpgradeRequired;
+            await context.Response.WriteAsync(
+                "This endpoint requires a WebSocket connection.",
+                cancellationToken);
+            return;
+        }
+
+        var backtest = await dbContext.Backtests
+            .Include(b => b.Symbol)
+            .Include(b => b.Interval)
+            .Include(b => b.TradingStrategy)
+            .FirstOrDefaultAsync(b => b.Id == backtestId, cancellationToken);
+
+        if (backtest is null)
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            await context.Response.WriteAsync($"Backtest {backtestId} not found.", cancellationToken);
+            return;
+        }
+
+        if (backtest.Status is not (BacktestStatus.Pending or BacktestStatus.Running))
+        {
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsync(
+                $"Backtest {backtestId} cannot be started: status is {backtest.Status}.",
+                cancellationToken);
+            return;
+        }
+
+        using var clientSocket = await context.WebSockets.AcceptWebSocketAsync();
+
+        // Monitor for client-initiated close frames on a background task.
+        using var disconnectCts = new CancellationTokenSource();
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, disconnectCts.Token);
+        var monitorTask = MonitorClientAsync(clientSocket, disconnectCts, linked.Token);
+
+        // Transition Pending → Running.
+        backtest.Status = BacktestStatus.Running;
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        try
+        {
+            await RunSimulationAsync(clientSocket, backtest, linked.Token);
+
+            backtest.Status = BacktestStatus.Completed;
+            backtest.CompletedAt = timeProvider.GetUtcNow();
+            await dbContext.SaveChangesAsync(CancellationToken.None);
+
+            if (clientSocket.State == WebSocketState.Open)
+            {
+                await clientSocket.CloseAsync(
+                    WebSocketCloseStatus.NormalClosure,
+                    "Backtest completed.",
+                    CancellationToken.None);
+            }
+        }
+        catch (OperationCanceledException) when (disconnectCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            logger.LogInformation("Backtest {Id} cancelled: client disconnected", backtest.Id);
+            backtest.Status = BacktestStatus.Cancelled;
+            backtest.CompletedAt = timeProvider.GetUtcNow();
+            await dbContext.SaveChangesAsync(CancellationToken.None);
+        }
+        catch (OperationCanceledException)
+        {
+            backtest.Status = BacktestStatus.Cancelled;
+            backtest.CompletedAt = timeProvider.GetUtcNow();
+            await dbContext.SaveChangesAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Backtest {Id} stream failed", backtest.Id);
+            backtest.Status = BacktestStatus.Failed;
+            backtest.CompletedAt = timeProvider.GetUtcNow();
+            await dbContext.SaveChangesAsync(CancellationToken.None);
+        }
+        finally
+        {
+            await monitorTask;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Simulation
+    // -------------------------------------------------------------------------
+
+    private async Task RunSimulationAsync(
+        WebSocket clientSocket,
+        Backtest backtest,
+        CancellationToken cancellationToken)
+    {
+        var rule = SelectRule(backtest.TradingStrategyId);
+
+        var rangeCandles = await dbContext.KlineData
+            .AsNoTracking()
+            .Where(k => k.SymbolId == backtest.SymbolId &&
+                        k.IntervalId == backtest.IntervalId &&
+                        k.OpenTime >= backtest.From &&
+                        k.OpenTime <= backtest.To)
+            .Include(k => k.SimpleMovingAverage)
+            .Include(k => k.RelativeStrengthIndex)
+            .Include(k => k.Macd)
+            .OrderBy(k => k.OpenTime)
+            .ToListAsync(cancellationToken);
+
+        var priorCandles = await dbContext.KlineData
+            .AsNoTracking()
+            .Where(k => k.SymbolId == backtest.SymbolId &&
+                        k.IntervalId == backtest.IntervalId &&
+                        k.OpenTime < backtest.From)
+            .Include(k => k.SimpleMovingAverage)
+            .Include(k => k.RelativeStrengthIndex)
+            .Include(k => k.Macd)
+            .OrderByDescending(k => k.OpenTime)
+            .Take(2)
+            .OrderBy(k => k.OpenTime)
+            .ToListAsync(cancellationToken);
+
+        // [prior0, prior1, range0, range1, ...]
+        var combined = priorCandles.Concat(rangeCandles).ToList();
+
+        // Resume state: balance and open trade from a previous partial run.
+        var balance = backtest.FinalBalance ?? backtest.InitialBalance;
+        var openTrade = await dbContext.Trades
+            .Where(t => t.BacktestId == backtest.Id && t.StatusId == (int)TradeStatus.Active)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        // Skip already-emitted candles; always need at least 2 items before current.
+        var startIndex = Math.Max(2, priorCandles.Count + backtest.CandleCount);
+
+        for (var i = startIndex; i < combined.Count; i++)
+        {
+            var current      = combined[i];
+            var previous     = combined[i - 1];
+            var secondPrev   = combined[i - 2];
+
+            var context = BuildContext(
+                backtest.Symbol.Code, backtest.Interval.Code,
+                secondPrev, previous, current);
+
+            // Check SL/TP on any open trade before evaluating signals.
+            if (openTrade is not null)
+            {
+                var (closeReason, closePrice) = CheckSlTp(openTrade, current);
+                if (closeReason.HasValue)
+                {
+                    CloseTrade(openTrade, closePrice!.Value, closeReason.Value, current.OpenTime, ref balance);
+                    await dbContext.SaveChangesAsync(cancellationToken);
+                    openTrade = null;
+                }
+            }
+
+            // Evaluate entry signal when flat.
+            if (openTrade is null)
+            {
+                TradeSide? side = null;
+                if (rule.ShouldEnterLong(context))
+                    side = TradeSide.Buy;
+                else if (rule.ShouldEnterShort(context))
+                    side = TradeSide.Sell;
+
+                if (side.HasValue)
+                {
+                    openTrade = new Trade
+                    {
+                        SymbolId         = backtest.SymbolId,
+                        IntervalId       = backtest.IntervalId,
+                        SideId           = (int)side.Value,
+                        OrderTypeId      = (int)TradeOrderType.Market,
+                        Quantity         = backtest.Quantity,
+                        EntryPrice       = current.Close,
+                        StopLoss         = backtest.StopLoss,
+                        TakeProfit       = backtest.TakeProfit,
+                        StatusId         = (int)TradeStatus.Active,
+                        CreatedAt        = current.OpenTime,
+                        OpenedAt         = current.OpenTime,
+                        TradingAccountId = null,
+                        BacktestId       = backtest.Id
+                    };
+                    dbContext.Trades.Add(openTrade);
+                    await dbContext.SaveChangesAsync(cancellationToken);
+                }
+            }
+
+            // Pace the stream: one candle every 5 seconds.
+            await Task.Delay(CandleInterval, cancellationToken);
+
+            // Send candle to client.
+            var dto = ToDto(current);
+            var payload = JsonSerializer.SerializeToUtf8Bytes(dto, JsonOptions);
+            await clientSocket.SendAsync(payload, WebSocketMessageType.Text, endOfMessage: true, cancellationToken);
+
+            // Persist incremental progress so REST endpoints reflect current state.
+            backtest.CandleCount++;
+            backtest.FinalBalance = balance;
+            backtest.Pnl = balance - backtest.InitialBalance;
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+
+        // Force-close any open trade at the final candle's close price.
+        if (openTrade is not null && rangeCandles.Count > 0)
+        {
+            var last = rangeCandles[^1];
+            CloseTrade(openTrade, last.Close, TradeCloseReason.Manual, last.CloseTime, ref balance);
+            backtest.FinalBalance = balance;
+            backtest.Pnl = balance - backtest.InitialBalance;
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
+    private ITradingRule SelectRule(int strategyId) => strategyId switch
+    {
+        1 => smaTradingRule,
+        2 => rsiTradingRule,
+        3 => macdTradingRule,
+        _ => throw new ArgumentException($"Unknown strategy id {strategyId}.")
+    };
+
+    private static TradingRuleContext BuildContext(
+        string symbolCode,
+        string intervalCode,
+        KlineData secondPrevious,
+        KlineData previous,
+        KlineData current) =>
+        new(
+            SymbolCode:          symbolCode,
+            IntervalCode:        intervalCode,
+            CurrentOpen:         current.Open,
+            CurrentHigh:         current.High,
+            CurrentLow:          current.Low,
+            CurrentClose:        current.Close,
+            PreviousClose:       previous.Close,
+            SecondPreviousClose: secondPrevious.Close,
+            CurrentSma20:        current.SimpleMovingAverage?.Sma20,
+            CurrentSma100:       current.SimpleMovingAverage?.Sma100,
+            PreviousSma20:       previous.SimpleMovingAverage?.Sma20,
+            PreviousSma100:      previous.SimpleMovingAverage?.Sma100,
+            SecondPreviousSma20: secondPrevious.SimpleMovingAverage?.Sma20,
+            CurrentRsi:          current.RelativeStrengthIndex?.Rsi,
+            CurrentRsiSmooth:    current.RelativeStrengthIndex?.RsiSmooth,
+            PreviousRsi:         previous.RelativeStrengthIndex?.Rsi,
+            PreviousRsiSmooth:   previous.RelativeStrengthIndex?.RsiSmooth,
+            CurrentMacdLine:     current.Macd?.MacdLine,
+            CurrentSignalLine:   current.Macd?.SignalLine,
+            CurrentHistogram:    current.Macd?.Histogram,
+            PreviousHistogram:   previous.Macd?.Histogram);
+
+    private static (TradeCloseReason? Reason, decimal? Price) CheckSlTp(Trade trade, KlineData candle)
+    {
+        var entry = trade.EntryPrice!.Value;
+        var isBuy = trade.SideId == (int)TradeSide.Buy;
+
+        // SL takes priority when both are hit intra-candle (conservative).
+        if (trade.StopLoss.HasValue)
+        {
+            var slPrice = isBuy ? entry - trade.StopLoss.Value : entry + trade.StopLoss.Value;
+            if (isBuy ? candle.Low <= slPrice : candle.High >= slPrice)
+                return (TradeCloseReason.StopLoss, slPrice);
+        }
+
+        if (trade.TakeProfit.HasValue)
+        {
+            var tpPrice = isBuy ? entry + trade.TakeProfit.Value : entry - trade.TakeProfit.Value;
+            if (isBuy ? candle.High >= tpPrice : candle.Low <= tpPrice)
+                return (TradeCloseReason.TakeProfit, tpPrice);
+        }
+
+        return (null, null);
+    }
+
+    private static void CloseTrade(
+        Trade trade,
+        decimal closePrice,
+        TradeCloseReason reason,
+        DateTimeOffset time,
+        ref decimal balance)
+    {
+        trade.StatusId      = (int)TradeStatus.Closed;
+        trade.ClosedAt      = time;
+        trade.ClosedPrice   = closePrice;
+        trade.CloseReasonId = (int)reason;
+        trade.Pnl           = trade.SideId == (int)TradeSide.Buy
+            ? (closePrice - trade.EntryPrice!.Value) * trade.Quantity
+            : (trade.EntryPrice!.Value - closePrice) * trade.Quantity;
+
+        balance += trade.Pnl.Value;
+    }
+
+    private static CandleWithIndicatorsResponseDto ToDto(KlineData k) =>
+        new(
+            k.OpenTime.ToUnixTimeSeconds(),
+            k.Open, k.High, k.Low, k.Close, k.Volume,
+            k.TakerBuyBaseAssetVolume,
+            k.Volume - k.TakerBuyBaseAssetVolume,
+            k.SimpleMovingAverage?.Sma20,
+            k.SimpleMovingAverage?.Sma100,
+            k.RelativeStrengthIndex?.Rsi,
+            k.RelativeStrengthIndex?.RsiSmooth,
+            k.RelativeStrengthIndex?.Divergence,
+            k.Macd?.MacdLine,
+            k.Macd?.SignalLine,
+            k.Macd?.Histogram);
+
+    // Reads incoming frames so the server detects client close frames.
+    private static async Task MonitorClientAsync(
+        WebSocket socket,
+        CancellationTokenSource disconnectCts,
+        CancellationToken cancellationToken)
+    {
+        var buffer = new byte[256];
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested && socket.State == WebSocketState.Open)
+            {
+                var result = await socket.ReceiveAsync(buffer, cancellationToken);
+                if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    await disconnectCts.CancelAsync();
+                    break;
+                }
+            }
+        }
+        catch
+        {
+            await disconnectCts.CancelAsync();
+        }
+    }
+}

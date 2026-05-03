@@ -32,9 +32,25 @@ public sealed class SmaTradingRule : ITradingRule
         return false;
     }
 
+    public bool LastThreeCandlesAboveSma20(TradingRuleContext context) =>
+        context.CurrentSma20.HasValue &&
+        context.PreviousSma20.HasValue &&
+        context.SecondPreviousSma20.HasValue &&
+        context.CurrentClose > context.CurrentSma20.Value &&
+        context.PreviousClose > context.PreviousSma20.Value &&
+        context.SecondPreviousClose > context.SecondPreviousSma20.Value;
+
+    public bool LastThreeCandlesBelowSma20(TradingRuleContext context) =>
+        context.CurrentSma20.HasValue &&
+        context.PreviousSma20.HasValue &&
+        context.SecondPreviousSma20.HasValue &&
+        context.CurrentClose < context.CurrentSma20.Value &&
+        context.PreviousClose < context.PreviousSma20.Value &&
+        context.SecondPreviousClose < context.SecondPreviousSma20.Value;
+
     public bool ShouldEnterLong(TradingRuleContext context) =>
-        IsSma20AboveSma100(context) && IsPriceRetestingSma20(context);
+        IsSma20AboveSma100(context) && IsPriceRetestingSma20(context) && LastThreeCandlesAboveSma20(context);
 
     public bool ShouldEnterShort(TradingRuleContext context) =>
-        IsSma20BelowSma100(context) && IsPriceRetestingSma20(context);
+        IsSma20BelowSma100(context) && IsPriceRetestingSma20(context) && LastThreeCandlesBelowSma20(context);
 }

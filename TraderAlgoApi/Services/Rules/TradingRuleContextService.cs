@@ -17,15 +17,16 @@ public sealed class TradingRuleContextService(ApplicationDbContext dbContext) : 
             .Include(k => k.RelativeStrengthIndex)
             .Include(k => k.Macd)
             .OrderByDescending(k => k.OpenTime)
-            .Take(2)
+            .Take(3)
             .OrderBy(k => k.OpenTime)
             .ToListAsync(cancellationToken);
 
-        if (candles.Count < 2)
+        if (candles.Count < 3)
             return null;
 
-        var previous = candles[0];
-        var current = candles[1];
+        var secondPrevious = candles[0];
+        var previous = candles[1];
+        var current = candles[2];
 
         return new TradingRuleContext(
             SymbolCode: symbolCode,
@@ -35,10 +36,12 @@ public sealed class TradingRuleContextService(ApplicationDbContext dbContext) : 
             CurrentLow: current.Low,
             CurrentClose: current.Close,
             PreviousClose: previous.Close,
+            SecondPreviousClose: secondPrevious.Close,
             CurrentSma20: current.SimpleMovingAverage?.Sma20,
             CurrentSma100: current.SimpleMovingAverage?.Sma100,
             PreviousSma20: previous.SimpleMovingAverage?.Sma20,
             PreviousSma100: previous.SimpleMovingAverage?.Sma100,
+            SecondPreviousSma20: secondPrevious.SimpleMovingAverage?.Sma20,
             CurrentRsi: current.RelativeStrengthIndex?.Rsi,
             CurrentRsiSmooth: current.RelativeStrengthIndex?.RsiSmooth,
             PreviousRsi: previous.RelativeStrengthIndex?.Rsi,
