@@ -12,5 +12,7 @@ public sealed record SmaRuleEvaluationResponseDto(
     bool IsSma20AboveSma100,
     bool IsSma20BelowSma100,
     bool IsPriceRetestingSma20,
+    bool LastThreeCandlesAboveSma20,
+    bool LastThreeCandlesBelowSma20,
     bool ShouldEnterLong,
     bool ShouldEnterShort);

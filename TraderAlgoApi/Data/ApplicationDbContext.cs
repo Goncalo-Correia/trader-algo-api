@@ -11,6 +11,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<KlineData> KlineData => Set<KlineData>();
     public DbSet<Trade>     Trades    => Set<Trade>();
     public DbSet<TradeBot>  TradeBots => Set<TradeBot>();
+    public DbSet<Backtest>  Backtests => Set<Backtest>();
 
     public DbSet<TradeSide>       TradeSides       => Set<TradeSide>();
     public DbSet<TradeOrderType>  TradeOrderTypes  => Set<TradeOrderType>();
@@ -206,6 +207,43 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.HasOne(b => b.Interval)
                 .WithMany()
                 .HasForeignKey(b => b.IntervalId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // -------------------------------------------------------------------
+        // Backtests
+        // -------------------------------------------------------------------
+        modelBuilder.Entity<Backtest>(entity =>
+        {
+            entity.HasOne(b => b.Symbol)
+                .WithMany()
+                .HasForeignKey(b => b.SymbolId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(b => b.Interval)
+                .WithMany()
+                .HasForeignKey(b => b.IntervalId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(b => b.TradingStrategy)
+                .WithMany()
+                .HasForeignKey(b => b.TradingStrategyId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(b => b.TradeBot)
+                .WithMany()
+                .HasForeignKey(b => b.TradeBotId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // -------------------------------------------------------------------
+        // Trade — Backtest FK (nullable, restrict; cascade delete from Backtest)
+        // -------------------------------------------------------------------
+        modelBuilder.Entity<Trade>(entity =>
+        {
+            entity.HasOne(t => t.Backtest)
+                .WithMany(b => b.Trades)
+                .HasForeignKey(t => t.BacktestId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
 

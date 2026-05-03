@@ -100,7 +100,8 @@ public sealed class TradeBotMonitorService(
             : TradeSide.Sell;
 
         var openTrade = await dbContext.Trades
-            .Where(t => t.TradingAccountId == tradeBot.TradingAccountId &&
+            .Where(t => t.BacktestId == null &&
+                        t.TradingAccountId == tradeBot.TradingAccountId &&
                         (t.StatusId == (int)TradeStatus.Active || t.StatusId == (int)TradeStatus.Pending))
             .OrderByDescending(t => t.CreatedAt)
             .FirstOrDefaultAsync(cancellationToken);

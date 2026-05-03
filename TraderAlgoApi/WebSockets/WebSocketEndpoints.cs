@@ -1,3 +1,4 @@
+using TraderAlgoApi.Services.Backtests;
 using TraderAlgoApi.Services.Charts;
 using TraderAlgoApi.Services.TradeEvents;
 
@@ -26,6 +27,16 @@ internal static class WebSocketEndpoints
             CancellationToken cancellationToken) =>
         {
             await liveChartDataService.StreamCandlesWithIndicatorsAsync(context, symbol, interval, cancellationToken);
+        })
+        .ExcludeFromDescription();
+
+        app.MapGet("/ws/charts/backtest", async (
+            HttpContext context,
+            long backtestId,
+            IBacktestStreamService backtestStreamService,
+            CancellationToken cancellationToken) =>
+        {
+            await backtestStreamService.StreamAsync(context, backtestId, cancellationToken);
         })
         .ExcludeFromDescription();
 

@@ -48,7 +48,8 @@ public sealed class TradeService(
         }
 
         var openTrades = dbContext.Trades
-            .Where(t => t.StatusId == (int)TradeStatus.Pending || t.StatusId == (int)TradeStatus.Active);
+            .Where(t => t.BacktestId == null &&
+                        (t.StatusId == (int)TradeStatus.Pending || t.StatusId == (int)TradeStatus.Active));
 
         var hasOpen = request.TradingAccountId is long openAccountId
             ? await openTrades.AnyAsync(t => t.TradingAccountId == openAccountId, cancellationToken)
@@ -191,7 +192,8 @@ public sealed class TradeService(
     {
         var trades = await TradeWithNavigations()
             .AsNoTracking()
-            .Where(t => t.TradingAccountId == tradingAccountId &&
+            .Where(t => t.BacktestId == null &&
+                        t.TradingAccountId == tradingAccountId &&
                         (t.StatusId == (int)TradeStatus.Active || t.StatusId == (int)TradeStatus.Pending))
             .OrderByDescending(t => t.CreatedAt)
             .ToListAsync(cancellationToken);
@@ -205,7 +207,8 @@ public sealed class TradeService(
     {
         var trades = await TradeWithNavigations()
             .AsNoTracking()
-            .Where(t => t.TradingAccountId == tradingAccountId &&
+            .Where(t => t.BacktestId == null &&
+                        t.TradingAccountId == tradingAccountId &&
                         (t.StatusId == (int)TradeStatus.Closed || t.StatusId == (int)TradeStatus.Cancelled))
             .OrderByDescending(t => t.ClosedAt)
             .ToListAsync(cancellationToken);
@@ -220,7 +223,8 @@ public sealed class TradeService(
     {
         // No Include needed — ToDto is not called here.
         var trades = await dbContext.Trades
-            .Where(t => t.Symbol.Code == symbol &&
+            .Where(t => t.BacktestId == null &&
+                        t.Symbol.Code == symbol &&
                         (t.StatusId == (int)TradeStatus.Pending || t.StatusId == (int)TradeStatus.Active))
             .ToListAsync(cancellationToken);
 

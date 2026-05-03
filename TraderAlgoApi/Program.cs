@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
+using TraderAlgoApi.Services.Backtests;
 using TraderAlgoApi.Services.Binance;
 using TraderAlgoApi.Services.Charts;
 using TraderAlgoApi.Services.DataCollector;
@@ -49,6 +50,8 @@ builder.Services.AddScoped<ITradingRuleContextService, TradingRuleContextService
 builder.Services.AddSingleton<SmaTradingRule>();
 builder.Services.AddSingleton<RsiTradingRule>();
 builder.Services.AddSingleton<MacdTradingRule>();
+builder.Services.AddScoped<IBacktestService, BacktestService>();
+builder.Services.AddScoped<IBacktestStreamService, BacktestStreamService>();
 builder.Services.AddScoped<ITradeBotService, TradeBotService>();
 builder.Services.AddScoped<ITradeBotSignalService, TradeBotSignalService>();
 builder.Services.AddScoped<ITradeEventStreamService, TradeEventStreamService>();

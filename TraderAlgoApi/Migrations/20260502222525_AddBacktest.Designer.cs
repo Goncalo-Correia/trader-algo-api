@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using TraderAlgoApi.Data;
@@ -11,9 +12,11 @@ using TraderAlgoApi.Data;
 namespace TraderAlgoApi.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260502222525_AddBacktest")]
+    partial class AddBacktest
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -54,32 +57,17 @@ namespace TraderAlgoApi.Migrations
                         .HasPrecision(28, 10)
                         .HasColumnType("numeric(28,10)");
 
-                    b.Property<decimal>("Quantity")
-                        .HasPrecision(28, 10)
-                        .HasColumnType("numeric(28,10)");
-
                     b.Property<DateTimeOffset>("StartedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<int>("Status")
                         .HasColumnType("integer");
 
-                    b.Property<decimal?>("StopLoss")
-                        .HasPrecision(28, 10)
-                        .HasColumnType("numeric(28,10)");
-
                     b.Property<int>("SymbolId")
                         .HasColumnType("integer");
 
-                    b.Property<decimal?>("TakeProfit")
-                        .HasPrecision(28, 10)
-                        .HasColumnType("numeric(28,10)");
-
                     b.Property<DateTimeOffset>("To")
                         .HasColumnType("timestamp with time zone");
-
-                    b.Property<long?>("TradeBotId")
-                        .HasColumnType("bigint");
 
                     b.Property<int>("TradingStrategyId")
                         .HasColumnType("integer");
@@ -89,8 +77,6 @@ namespace TraderAlgoApi.Migrations
                     b.HasIndex("IntervalId");
 
                     b.HasIndex("SymbolId");
-
-                    b.HasIndex("TradeBotId");
 
                     b.HasIndex("TradingStrategyId");
 
@@ -773,11 +759,6 @@ namespace TraderAlgoApi.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.HasOne("TraderAlgoApi.Models.TradeBot", "TradeBot")
-                        .WithMany()
-                        .HasForeignKey("TradeBotId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
                     b.HasOne("TraderAlgoApi.Models.Lookups.TradingStrategy", "TradingStrategy")
                         .WithMany()
                         .HasForeignKey("TradingStrategyId")
@@ -787,8 +768,6 @@ namespace TraderAlgoApi.Migrations
                     b.Navigation("Interval");
 
                     b.Navigation("Symbol");
-
-                    b.Navigation("TradeBot");
 
                     b.Navigation("TradingStrategy");
                 });

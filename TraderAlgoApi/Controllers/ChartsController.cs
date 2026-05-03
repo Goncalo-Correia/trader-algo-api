@@ -19,7 +19,6 @@ public sealed class ChartsController(ApplicationDbContext dbContext) : Controlle
         CancellationToken cancellationToken = default)
     {
         var symbolCode = string.IsNullOrWhiteSpace(symbol)
-
             ? await dbContext.Symbols
                 .Where(s => s.IsDefault)
                 .Select(s => s.Code)

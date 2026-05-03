@@ -77,4 +77,9 @@ public sealed class Trade
 
     [ForeignKey(nameof(TradingAccountId))]
     public TradingAccount? TradingAccount { get; set; }
+
+    public long? BacktestId { get; set; }
+
+    [ForeignKey(nameof(BacktestId))]
+    public Backtest? Backtest { get; set; }
 }

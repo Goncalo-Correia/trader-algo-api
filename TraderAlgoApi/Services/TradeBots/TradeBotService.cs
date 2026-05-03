@@ -28,6 +28,14 @@ public sealed class TradeBotService(
         if (existing)
             throw new InvalidOperationException($"A tradebot already exists for trading account {request.TradingAccountId}.");
 
+        if (request.IsEnabled)
+        {
+            var alreadyEnabled = await dbContext.TradeBots.AnyAsync(b => b.IsEnabled, cancellationToken);
+            if (alreadyEnabled)
+                throw new InvalidOperationException(
+                    "Another tradebot is already enabled. Disable it before enabling this one.");
+        }
+
         var symbol = await LoadActiveSymbolAsync(request.SymbolCode, cancellationToken);
         var interval = await LoadActiveIntervalAsync(request.IntervalCode, cancellationToken);
 
@@ -96,6 +104,15 @@ public sealed class TradeBotService(
         var interval = await LoadActiveIntervalAsync(request.IntervalCode, cancellationToken);
         var wasEnabled = tradeBot.IsEnabled;
 
+        if (request.IsEnabled && !wasEnabled)
+        {
+            var alreadyEnabled = await dbContext.TradeBots
+                .AnyAsync(b => b.Id != id && b.IsEnabled, cancellationToken);
+            if (alreadyEnabled)
+                throw new InvalidOperationException(
+                    "Another tradebot is already enabled. Disable it before enabling this one.");
+        }
+
         tradeBot.SymbolId = symbol.Id;
         tradeBot.IntervalId = interval.Id;
         tradeBot.IsEnabled = request.IsEnabled;
@@ -126,6 +143,15 @@ public sealed class TradeBotService(
 
         if (isEnabled && !tradeBot.TradingAccount.IsActive)
             throw new InvalidOperationException($"Trading account {tradeBot.TradingAccountId} is not active.");
+
+        if (isEnabled && !tradeBot.IsEnabled)
+        {
+            var alreadyEnabled = await dbContext.TradeBots
+                .AnyAsync(b => b.Id != id && b.IsEnabled, cancellationToken);
+            if (alreadyEnabled)
+                throw new InvalidOperationException(
+                    "Another tradebot is already enabled. Disable it before enabling this one.");
+        }
 
         tradeBot.IsEnabled = isEnabled;
         tradeBot.UpdatedAt = timeProvider.GetUtcNow();
