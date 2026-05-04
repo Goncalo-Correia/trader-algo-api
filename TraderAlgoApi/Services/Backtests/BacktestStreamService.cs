@@ -23,6 +23,10 @@ public sealed class BacktestStreamService(
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly TimeSpan CandleInterval = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeZoneInfo EasternZone =
+        TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+    private static readonly TimeOnly NyOpen  = new(9, 30);
+    private static readonly TimeOnly NyClose = new(16, 0);
 
     public async Task StreamAsync(
         HttpContext context,
@@ -158,6 +162,19 @@ public sealed class BacktestStreamService(
             .Where(t => t.BacktestId == backtest.Id && t.StatusId == (int)TradeStatus.Active)
             .FirstOrDefaultAsync(cancellationToken);
 
+        // Rebuild daily stats from trades already closed in a previous partial run.
+        var closedTrades = await dbContext.Trades
+            .AsNoTracking()
+            .Where(t => t.BacktestId == backtest.Id && t.StatusId == (int)TradeStatus.Closed && t.ClosedAt.HasValue)
+            .ToListAsync(cancellationToken);
+
+        var dailyStats = closedTrades
+            .GroupBy(t => DateOnly.FromDateTime(
+                TimeZoneInfo.ConvertTime(t.ClosedAt!.Value, EasternZone).DateTime))
+            .ToDictionary(
+                g => g.Key,
+                g => (Pnl: g.Sum(t => t.Pnl ?? 0m), Losses: g.Count(t => (t.Pnl ?? 0m) < 0)));
+
         // Skip already-emitted candles; always need at least 2 items before current.
         var startIndex = Math.Max(2, priorCandles.Count + backtest.CandleCount);
 
@@ -179,6 +196,16 @@ public sealed class BacktestStreamService(
                 {
                     CloseTrade(openTrade, closePrice!.Value, closeReason.Value, current.OpenTime, ref balance);
                     await dbContext.SaveChangesAsync(cancellationToken);
+
+                    // Update daily stats for the newly closed trade.
+                    var closeDay = DateOnly.FromDateTime(
+                        TimeZoneInfo.ConvertTime(openTrade.ClosedAt!.Value, EasternZone).DateTime);
+                    if (!dailyStats.TryGetValue(closeDay, out var stats))
+                        stats = (0m, 0);
+                    dailyStats[closeDay] = (
+                        stats.Pnl + (openTrade.Pnl ?? 0m),
+                        stats.Losses + ((openTrade.Pnl ?? 0m) < 0 ? 1 : 0));
+
                     openTrade = null;
                 }
             }
@@ -210,7 +237,7 @@ public sealed class BacktestStreamService(
             }
 
             // Evaluate entry signal when flat.
-            if (openTrade is null)
+            if (openTrade is null && CanEnterToday(backtest, current.OpenTime, dailyStats))
             {
                 TradeSide? side = null;
                 if (rule.ShouldEnterLong(context))
@@ -272,6 +299,35 @@ public sealed class BacktestStreamService(
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    private static bool CanEnterToday(
+        Backtest backtest,
+        DateTimeOffset candleTime,
+        Dictionary<DateOnly, (decimal Pnl, int Losses)> dailyStats)
+    {
+        var easternTime = TimeZoneInfo.ConvertTime(candleTime, EasternZone);
+
+        if (backtest.IsNySessionOnly)
+        {
+            var tod = TimeOnly.FromDateTime(easternTime.DateTime);
+            if (tod < NyOpen || tod >= NyClose)
+                return false;
+        }
+
+        if (backtest.DailyProfitGoal.HasValue || backtest.MaxLossesPerDay.HasValue)
+        {
+            var day = DateOnly.FromDateTime(easternTime.DateTime);
+            dailyStats.TryGetValue(day, out var stats);
+
+            if (backtest.DailyProfitGoal.HasValue && stats.Pnl >= backtest.DailyProfitGoal.Value)
+                return false;
+
+            if (backtest.MaxLossesPerDay.HasValue && stats.Losses >= backtest.MaxLossesPerDay.Value)
+                return false;
+        }
+
+        return true;
+    }
 
     private ITradingRule SelectRule(int strategyId) => strategyId switch
     {

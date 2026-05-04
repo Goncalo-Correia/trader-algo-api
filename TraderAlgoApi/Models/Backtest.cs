@@ -66,6 +66,13 @@ public sealed class Backtest
     [Precision(28, 10)]
     public decimal? Breakeven { get; set; }
 
+    public bool IsNySessionOnly { get; set; }
+
+    [Precision(28, 10)]
+    public decimal? DailyProfitGoal { get; set; }
+
+    public int? MaxLossesPerDay { get; set; }
+
     public int CandleCount { get; set; }
 
     public ICollection<Trade> Trades { get; set; } = [];
