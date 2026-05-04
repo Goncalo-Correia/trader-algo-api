@@ -16,7 +16,7 @@ public sealed class TradesController(ITradeService tradeService) : ControllerBas
         try
         {
             var trade = await tradeService.CreateAsync(request, cancellationToken);
-            return CreatedAtAction(nameof(GetActive), new { tradingAccountId = trade.TradingAccountId }, trade);
+            return CreatedAtAction(nameof(GetActive), new { tradingAccountId = trade.TradingAccountId ?? 0 }, trade);
         }
         catch (ArgumentException ex)      { return BadRequest(ex.Message); }
         catch (InvalidOperationException ex) { return Conflict(ex.Message); }
@@ -49,25 +49,27 @@ public sealed class TradesController(ITradeService tradeService) : ControllerBas
         catch (InvalidOperationException ex) { return Conflict(ex.Message); }
     }
 
-    [HttpGet("active")]
+    [HttpGet("account/{tradingAccountId:long}/active")]
     public async Task<ActionResult<IReadOnlyList<TradeResponseDto>>> GetActive(
-        [FromQuery] long tradingAccountId,
+        long tradingAccountId,
         CancellationToken cancellationToken)
     {
-        if (tradingAccountId <= 0)
-            return BadRequest("tradingAccountId is required.");
-
         return Ok(await tradeService.GetActiveAsync(tradingAccountId, cancellationToken));
     }
 
-    [HttpGet("history")]
+    [HttpGet("account/{tradingAccountId:long}/history")]
     public async Task<ActionResult<IReadOnlyList<TradeResponseDto>>> GetHistory(
-        [FromQuery] long tradingAccountId,
+        long tradingAccountId,
         CancellationToken cancellationToken)
     {
-        if (tradingAccountId <= 0)
-            return BadRequest("tradingAccountId is required.");
-
         return Ok(await tradeService.GetHistoryAsync(tradingAccountId, cancellationToken));
+    }
+
+    [HttpGet("backtest/{backtestId:long}")]
+    public async Task<ActionResult<IReadOnlyList<TradeResponseDto>>> GetByBacktest(
+        long backtestId,
+        CancellationToken cancellationToken)
+    {
+        return Ok(await tradeService.GetByBacktestAsync(backtestId, cancellationToken));
     }
 }

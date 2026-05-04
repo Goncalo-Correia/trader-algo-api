@@ -32,5 +32,5 @@ public sealed class TradingAccount
 
     public ICollection<Trade> Trades { get; set; } = [];
 
-    public TradeBot? TradeBot { get; set; }
+    public ICollection<TradeBot> TradeBots { get; set; } = [];
 }

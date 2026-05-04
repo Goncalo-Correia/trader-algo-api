@@ -27,28 +27,32 @@ public sealed class BacktestService(
         if (request.From >= request.To)
             throw new ArgumentException("'from' must be earlier than 'to'.");
 
-        var tradeBot = await dbContext.TradeBots
-            .Include(b => b.TradingAccount)
-            .Where(b => b.IsEnabled && b.TradingAccount.IsActive)
-            .FirstOrDefaultAsync(cancellationToken)
-            ?? throw new InvalidOperationException(
-                "No active tradebot found. Enable a tradebot before creating a backtest.");
+        var templateBot = await LoadTemplateBotAsync(request, cancellationToken);
+        var tradingStrategyId = request.TradingStrategy.HasValue
+            ? (int)request.TradingStrategy.Value
+            : templateBot.TradingStrategyId;
+        var quantity = request.Quantity ?? templateBot.Quantity;
+        var stopLoss = request.StopLoss ?? templateBot.StopLoss;
+        var takeProfit = request.TakeProfit ?? templateBot.TakeProfit;
+
+        if (quantity <= 0)
+            throw new ArgumentException("'quantity' must be greater than zero.");
 
         var strategy = await dbContext.TradingStrategies
-            .FirstOrDefaultAsync(s => s.Id == tradeBot.TradingAccount.TradingStrategyId, cancellationToken)
+            .FirstOrDefaultAsync(s => s.Id == tradingStrategyId, cancellationToken)
             ?? throw new InvalidOperationException(
-                $"Strategy {tradeBot.TradingAccount.TradingStrategyId} not found.");
+                $"Strategy {tradingStrategyId} not found.");
 
         var now = timeProvider.GetUtcNow();
         var backtest = new Backtest
         {
             SymbolId          = symbol.Id,
             IntervalId        = interval.Id,
-            TradingStrategyId = tradeBot.TradingAccount.TradingStrategyId,
-            TradeBotId        = tradeBot.Id,
-            Quantity          = tradeBot.Quantity,
-            StopLoss          = tradeBot.StopLoss,
-            TakeProfit        = tradeBot.TakeProfit,
+            TradingStrategyId = tradingStrategyId,
+            Quantity          = quantity,
+            StopLoss          = stopLoss,
+            TakeProfit        = takeProfit,
+            Breakeven         = request.Breakeven,
             From              = request.From,
             To                = request.To,
             StartedAt         = now,
@@ -58,6 +62,26 @@ public sealed class BacktestService(
         };
 
         dbContext.Backtests.Add(backtest);
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        var tradeBot = new TradeBot
+        {
+            BacktestId        = backtest.Id,
+            TradingStrategyId = tradingStrategyId,
+            SymbolId          = symbol.Id,
+            IntervalId        = interval.Id,
+            IsEnabled         = true,
+            Quantity          = quantity,
+            StopLoss          = stopLoss,
+            TakeProfit        = takeProfit,
+            CreatedAt         = now,
+            UpdatedAt         = now
+        };
+
+        dbContext.TradeBots.Add(tradeBot);
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        backtest.TradeBotId = tradeBot.Id;
         await dbContext.SaveChangesAsync(cancellationToken);
 
         return ToSummaryDto(backtest, symbol, interval, strategy, 0);
@@ -145,15 +169,65 @@ public sealed class BacktestService(
             Quantity:       backtest.Quantity,
             StopLoss:       backtest.StopLoss,
             TakeProfit:     backtest.TakeProfit,
+            Breakeven:      backtest.Breakeven,
             CandleCount:    backtest.CandleCount,
             Trades:         tradeDtos,
             Candles:        candles,
             EquityCurve:    equity);
     }
 
+    public async Task DeleteAsync(long id, CancellationToken cancellationToken = default)
+    {
+        var exists = await dbContext.Backtests
+            .AnyAsync(b => b.Id == id, cancellationToken);
+
+        if (!exists)
+            throw new KeyNotFoundException($"Backtest {id} not found.");
+
+        await dbContext.Trades
+            .Where(t => t.BacktestId == id)
+            .ExecuteDeleteAsync(cancellationToken);
+
+        await dbContext.TradeBots
+            .Where(b => b.BacktestId == id)
+            .ExecuteDeleteAsync(cancellationToken);
+
+        await dbContext.Backtests
+            .Where(b => b.Id == id)
+            .ExecuteDeleteAsync(cancellationToken);
+    }
+
     // -------------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------------
+
+    private async Task<TradeBot> LoadTemplateBotAsync(
+        CreateBacktestRequestDto request,
+        CancellationToken cancellationToken)
+    {
+        if (request.TradingStrategy.HasValue && request.Quantity.HasValue)
+        {
+            return new TradeBot
+            {
+                TradingStrategyId = (int)request.TradingStrategy.Value,
+                Quantity = request.Quantity.Value,
+                StopLoss = request.StopLoss,
+                TakeProfit = request.TakeProfit
+            };
+        }
+
+        return await dbContext.TradeBots
+            .Include(b => b.TradingAccount)
+            .Where(b => b.IsEnabled &&
+                        b.BacktestId == null &&
+                        b.TradingAccountId != null &&
+                        b.TradingAccount != null &&
+                        b.TradingAccount.IsActive)
+            .OrderByDescending(b => b.UpdatedAt)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new InvalidOperationException(
+                "Provide tradingStrategy and quantity, or enable an account tradebot to use as the backtest template.");
+    }
 
     private static IReadOnlyList<EquityPointDto> BuildEquityCurve(Backtest backtest)
     {
@@ -198,6 +272,7 @@ public sealed class BacktestService(
             Quantity:       b.Quantity,
             StopLoss:       b.StopLoss,
             TakeProfit:     b.TakeProfit,
+            Breakeven:      b.Breakeven,
             CandleCount:    b.CandleCount,
             TradeCount:     tradeCount);
 
@@ -221,5 +296,6 @@ public sealed class BacktestService(
             CloseReason:      t.CloseReasonId is int id ? (TradeCloseReason)id : null,
             Pnl:              t.Pnl,
             UnrealizedPnl:    null,
-            TradingAccountId: t.TradingAccountId);
+            TradingAccountId: t.TradingAccountId,
+            BacktestId:       t.BacktestId);
 }

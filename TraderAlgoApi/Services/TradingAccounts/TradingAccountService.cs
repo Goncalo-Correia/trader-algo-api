@@ -78,6 +78,27 @@ public sealed class TradingAccountService(
         return ToDto(account);
     }
 
+    public async Task DeleteAsync(long id, CancellationToken cancellationToken = default)
+    {
+        var exists = await dbContext.TradingAccounts
+            .AnyAsync(a => a.Id == id, cancellationToken);
+
+        if (!exists)
+            throw new KeyNotFoundException($"Trading account {id} not found.");
+
+        await dbContext.Trades
+            .Where(t => t.TradingAccountId == id)
+            .ExecuteDeleteAsync(cancellationToken);
+
+        await dbContext.TradeBots
+            .Where(b => b.TradingAccountId == id)
+            .ExecuteDeleteAsync(cancellationToken);
+
+        await dbContext.TradingAccounts
+            .Where(a => a.Id == id)
+            .ExecuteDeleteAsync(cancellationToken);
+    }
+
     private static TradingAccountResponseDto ToDto(TradingAccount a) =>
         new(
             Id:              a.Id,

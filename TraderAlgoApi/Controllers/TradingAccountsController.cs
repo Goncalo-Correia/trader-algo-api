@@ -52,4 +52,15 @@ public sealed class TradingAccountsController(ITradingAccountService tradingAcco
         }
         catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
     }
+
+    [HttpDelete("{id:long}")]
+    public async Task<IActionResult> Delete(long id, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await tradingAccountService.DeleteAsync(id, cancellationToken);
+            return NoContent();
+        }
+        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
+    }
 }

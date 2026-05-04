@@ -22,18 +22,19 @@ public sealed class TradeBotService(
             .FirstOrDefaultAsync(a => a.Id == request.TradingAccountId, cancellationToken)
             ?? throw new ArgumentException($"Trading account {request.TradingAccountId} not found.");
 
-        var existing = await dbContext.TradeBots
-            .AnyAsync(b => b.TradingAccountId == request.TradingAccountId, cancellationToken);
-
-        if (existing)
-            throw new InvalidOperationException($"A tradebot already exists for trading account {request.TradingAccountId}.");
-
         if (request.IsEnabled)
         {
-            var alreadyEnabled = await dbContext.TradeBots.AnyAsync(b => b.IsEnabled, cancellationToken);
+            if (!account.IsActive)
+                throw new InvalidOperationException($"Trading account {request.TradingAccountId} is not active.");
+
+            var alreadyEnabled = await dbContext.TradeBots
+                .AnyAsync(
+                    b => b.TradingAccountId == request.TradingAccountId &&
+                         b.IsEnabled,
+                    cancellationToken);
             if (alreadyEnabled)
                 throw new InvalidOperationException(
-                    "Another tradebot is already enabled. Disable it before enabling this one.");
+                    $"Another tradebot is already enabled for trading account {request.TradingAccountId}. Disable it before enabling this one.");
         }
 
         var symbol = await LoadActiveSymbolAsync(request.SymbolCode, cancellationToken);
@@ -43,6 +44,7 @@ public sealed class TradeBotService(
         var tradeBot = new TradeBot
         {
             TradingAccountId = account.Id,
+            TradingStrategyId = account.TradingStrategyId,
             SymbolId         = symbol.Id,
             IntervalId       = interval.Id,
             IsEnabled        = request.IsEnabled,
@@ -106,11 +108,7 @@ public sealed class TradeBotService(
 
         if (request.IsEnabled && !wasEnabled)
         {
-            var alreadyEnabled = await dbContext.TradeBots
-                .AnyAsync(b => b.Id != id && b.IsEnabled, cancellationToken);
-            if (alreadyEnabled)
-                throw new InvalidOperationException(
-                    "Another tradebot is already enabled. Disable it before enabling this one.");
+            await EnsureCanEnableAsync(tradeBot, cancellationToken);
         }
 
         tradeBot.SymbolId = symbol.Id;
@@ -141,17 +139,8 @@ public sealed class TradeBotService(
             .FirstOrDefaultAsync(b => b.Id == id, cancellationToken)
             ?? throw new KeyNotFoundException($"Tradebot {id} not found.");
 
-        if (isEnabled && !tradeBot.TradingAccount.IsActive)
-            throw new InvalidOperationException($"Trading account {tradeBot.TradingAccountId} is not active.");
-
         if (isEnabled && !tradeBot.IsEnabled)
-        {
-            var alreadyEnabled = await dbContext.TradeBots
-                .AnyAsync(b => b.Id != id && b.IsEnabled, cancellationToken);
-            if (alreadyEnabled)
-                throw new InvalidOperationException(
-                    "Another tradebot is already enabled. Disable it before enabling this one.");
-        }
+            await EnsureCanEnableAsync(tradeBot, cancellationToken);
 
         tradeBot.IsEnabled = isEnabled;
         tradeBot.UpdatedAt = timeProvider.GetUtcNow();
@@ -166,6 +155,7 @@ public sealed class TradeBotService(
     private IQueryable<TradeBot> TradeBotWithNavigations() =>
         dbContext.TradeBots
             .Include(b => b.TradingAccount)
+            .Include(b => b.TradingStrategy)
             .Include(b => b.Symbol)
             .Include(b => b.Interval);
 
@@ -179,12 +169,51 @@ public sealed class TradeBotService(
             .FirstOrDefaultAsync(i => i.IsActive && i.Code == intervalCode, cancellationToken)
         ?? throw new ArgumentException($"Active interval '{intervalCode}' not found.");
 
+    private async Task EnsureCanEnableAsync(TradeBot tradeBot, CancellationToken cancellationToken)
+    {
+        if (tradeBot.TradingAccountId is long accountId)
+        {
+            if (tradeBot.TradingAccount?.IsActive != true)
+                throw new InvalidOperationException($"Trading account {accountId} is not active.");
+
+            var alreadyEnabled = await dbContext.TradeBots
+                .AnyAsync(
+                    b => b.Id != tradeBot.Id &&
+                         b.TradingAccountId == accountId &&
+                         b.IsEnabled,
+                    cancellationToken);
+            if (alreadyEnabled)
+                throw new InvalidOperationException(
+                    $"Another tradebot is already enabled for trading account {accountId}. Disable it before enabling this one.");
+
+            return;
+        }
+
+        if (tradeBot.BacktestId is long backtestId)
+        {
+            var alreadyEnabled = await dbContext.TradeBots
+                .AnyAsync(
+                    b => b.Id != tradeBot.Id &&
+                         b.BacktestId == backtestId &&
+                         b.IsEnabled,
+                    cancellationToken);
+            if (alreadyEnabled)
+                throw new InvalidOperationException(
+                    $"Another tradebot is already enabled for backtest {backtestId}. Disable it before enabling this one.");
+
+            return;
+        }
+
+        throw new InvalidOperationException($"Tradebot {tradeBot.Id} is not attached to a trading account or backtest.");
+    }
+
     private static TradeBotResponseDto ToDto(TradeBot b) =>
         new(
             Id:                 b.Id,
             TradingAccountId:   b.TradingAccountId,
-            TradingAccountName: b.TradingAccount.Name,
-            TradingStrategy:    (TradingStrategy)b.TradingAccount.TradingStrategyId,
+            TradingAccountName: b.TradingAccount?.Name,
+            BacktestId:         b.BacktestId,
+            TradingStrategy:    (TradingStrategy)b.TradingStrategyId,
             SymbolCode:         b.Symbol.Code,
             IntervalCode:       b.Interval.Code,
             IsEnabled:          b.IsEnabled,

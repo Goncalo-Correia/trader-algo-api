@@ -55,9 +55,13 @@ public sealed class TradeBotMonitorService(
 
             var tradeBots = await dbContext.TradeBots
                 .Include(b => b.TradingAccount)
+                .Include(b => b.TradingStrategy)
                 .Include(b => b.Symbol)
                 .Include(b => b.Interval)
                 .Where(b => b.IsEnabled &&
+                            b.TradingAccountId != null &&
+                            b.BacktestId == null &&
+                            b.TradingAccount != null &&
                             b.TradingAccount.IsActive &&
                             b.Symbol.Code == candle.Symbol &&
                             b.Interval.Code == candle.Interval)
@@ -144,7 +148,7 @@ public sealed class TradeBotMonitorService(
                     LimitPrice: null,
                     StopLoss: tradeBot.StopLoss,
                     TakeProfit: tradeBot.TakeProfit,
-                    TradingAccountId: tradeBot.TradingAccountId),
+                    TradingAccountId: tradeBot.TradingAccountId!.Value),
                 cancellationToken);
 
             logger.LogInformation(

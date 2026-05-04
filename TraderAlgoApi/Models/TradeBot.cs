@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations.Schema;
 using Microsoft.EntityFrameworkCore;
+using TraderAlgoApi.Models.Lookups;
 
 namespace TraderAlgoApi.Models;
 
@@ -8,10 +9,20 @@ public sealed class TradeBot
 {
     public long Id { get; set; }
 
-    public long TradingAccountId { get; set; }
+    public long? TradingAccountId { get; set; }
 
     [ForeignKey(nameof(TradingAccountId))]
-    public TradingAccount TradingAccount { get; set; } = null!;
+    public TradingAccount? TradingAccount { get; set; }
+
+    public long? BacktestId { get; set; }
+
+    [ForeignKey(nameof(BacktestId))]
+    public Backtest? Backtest { get; set; }
+
+    public int TradingStrategyId { get; set; }
+
+    [ForeignKey(nameof(TradingStrategyId))]
+    public TradingStrategy TradingStrategy { get; set; } = null!;
 
     public int SymbolId { get; set; }
 
