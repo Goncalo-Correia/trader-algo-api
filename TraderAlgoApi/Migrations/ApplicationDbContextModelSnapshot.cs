@@ -34,6 +34,16 @@ namespace TraderAlgoApi.Migrations
                         .HasPrecision(28, 10)
                         .HasColumnType("numeric(28,10)");
 
+                    b.Property<decimal?>("DailyProfitGoal")
+                        .HasPrecision(28, 10)
+                        .HasColumnType("numeric(28,10)");
+
+                    b.Property<bool>("IsNySessionOnly")
+                        .HasColumnType("boolean");
+
+                    b.Property<int?>("MaxLossesPerDay")
+                        .HasColumnType("integer");
+
                     b.Property<int>("CandleCount")
                         .HasColumnType("integer");
 
