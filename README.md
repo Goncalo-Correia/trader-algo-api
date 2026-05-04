@@ -10,6 +10,10 @@ ASP.NET Core backend API for algorithmic trading — collects K-line data from B
 
 - [Architecture](#architecture)
 - [API Reference](#api-reference)
+- [Trading Strategies](#trading-strategies)
+  - [SMA](#sma-simple-moving-average)
+  - [RSI](#rsi-relative-strength-index)
+  - [MACD](#macd-moving-average-convergence-divergence)
 - [Kronos](#kronos)
   - [Overview](#overview)
   - [Models](#models)
@@ -114,6 +118,50 @@ ASP.NET Core backend API for algorithmic trading — collects K-line data from B
 |---|---|---|---|
 | `symbol` | string | Yes | Trading pair code (e.g. `BTCUSDT`) |
 | `interval` | string | Yes | Interval code (e.g. `1h`) |
+
+---
+
+## Trading Strategies
+
+### SMA (Simple Moving Average)
+
+Uses **SMA20** (fast) and **SMA100** (slow). All three rules must be true simultaneously to enter.
+
+| Rule | Long | Short |
+|---|---|---|
+| Trend filter | SMA20 > SMA100 | SMA20 < SMA100 |
+| Price retest wick | `candle low ≤ SMA20 ≤ candle high` | `candle low ≤ SMA20 ≤ candle high` |
+| Price retest close | Close **above** SMA20 | Close **below** SMA20 |
+| Last 3 candle closes | All **above** their SMA20 | All **below** their SMA20 |
+
+The retest rule requires the wick to touch SMA20 (price tapped the level) while the close confirms the direction of rejection. The last-three-candles rule ensures price has not broken through SMA20 before the retest.
+
+---
+
+### RSI (Relative Strength Index)
+
+Uses **RSI(14)** and a **smoothed RSI** (signal line). Both rules must be true to enter.
+
+| Rule | Long | Short |
+|---|---|---|
+| Oversold / overbought | RSI **< 30** | RSI **> 70** |
+| Momentum confirmation | RSI **above** smoothed RSI | RSI **below** smoothed RSI |
+
+The smoothed RSI acts as a signal line. Crossing above it while in oversold territory confirms a momentum shift upward; crossing below it while in overbought territory confirms a momentum shift downward.
+
+---
+
+### MACD (Moving Average Convergence Divergence)
+
+Uses the **MACD line**, **signal line**, and **histogram**. All three rules must be true to enter. The strategy trades momentum exhaustion — entering before a full crossover occurs.
+
+| Rule | Long | Short |
+|---|---|---|
+| Line relationship | MACD line **below** signal line | MACD line **above** signal line |
+| Histogram side | Histogram **below zero** | Histogram **above zero** |
+| Histogram direction | Histogram **increasing** (shrinking toward zero) | Histogram **decreasing** (shrinking toward zero) |
+
+Bearish momentum is weakening (long): the histogram is still negative but rising, signalling that selling pressure is fading before a crossover. Bullish momentum is weakening (short): the histogram is still positive but falling, signalling that buying pressure is fading before a crossover.
 
 ---
 
