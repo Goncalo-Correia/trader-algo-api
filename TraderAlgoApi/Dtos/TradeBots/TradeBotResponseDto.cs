@@ -5,8 +5,9 @@ namespace TraderAlgoApi.Dtos.TradeBots;
 
 public sealed record TradeBotResponseDto(
     [property: JsonPropertyName("id")] long Id,
-    [property: JsonPropertyName("tradingAccountId")] long TradingAccountId,
-    [property: JsonPropertyName("tradingAccountName")] string TradingAccountName,
+    [property: JsonPropertyName("tradingAccountId")] long? TradingAccountId,
+    [property: JsonPropertyName("tradingAccountName")] string? TradingAccountName,
+    [property: JsonPropertyName("backtestId")] long? BacktestId,
     [property: JsonPropertyName("tradingStrategy")] TradingStrategy TradingStrategy,
     [property: JsonPropertyName("symbolCode")] string SymbolCode,
     [property: JsonPropertyName("intervalCode")] string IntervalCode,

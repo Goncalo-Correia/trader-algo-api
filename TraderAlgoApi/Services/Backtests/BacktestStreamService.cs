@@ -2,6 +2,7 @@ using System.Net.WebSockets;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
+using TraderAlgoApi.Dtos.Backtests;
 using TraderAlgoApi.Dtos.Charts;
 using TraderAlgoApi.Models;
 using TraderAlgoApi.Models.Enums;
@@ -21,7 +22,7 @@ public sealed class BacktestStreamService(
     ILogger<BacktestStreamService> logger) : IBacktestStreamService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private static readonly TimeSpan CandleInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan CandleInterval = TimeSpan.FromMilliseconds(100);
 
     public async Task StreamAsync(
         HttpContext context,
@@ -182,6 +183,32 @@ public sealed class BacktestStreamService(
                 }
             }
 
+            // Check breakeven trigger on the surviving open trade.
+            if (openTrade is not null && backtest.Breakeven.HasValue && openTrade.StopLoss != 0)
+            {
+                var breakevenTriggered = CheckBreakeven(openTrade, current, backtest.Breakeven.Value);
+                if (breakevenTriggered)
+                {
+                    openTrade.StopLoss = 0;
+                    await dbContext.SaveChangesAsync(cancellationToken);
+
+                    var bracketUpdate = new TradeBracketUpdateDto(
+                        TradeId:    openTrade.Id,
+                        StopLoss:   openTrade.StopLoss,
+                        TakeProfit: openTrade.TakeProfit);
+
+                    var bracketPayload = JsonSerializer.SerializeToUtf8Bytes(
+                        new BacktestStreamMessageDto<TradeBracketUpdateDto>("tradeBracketUpdate", bracketUpdate),
+                        JsonOptions);
+
+                    await clientSocket.SendAsync(
+                        bracketPayload,
+                        WebSocketMessageType.Text,
+                        endOfMessage: true,
+                        cancellationToken);
+                }
+            }
+
             // Evaluate entry signal when flat.
             if (openTrade is null)
             {
@@ -214,12 +241,14 @@ public sealed class BacktestStreamService(
                 }
             }
 
-            // Pace the stream: one candle every 5 seconds.
+            // Pace the stream: one candle every 0.1 seconds.
             await Task.Delay(CandleInterval, cancellationToken);
 
             // Send candle to client.
-            var dto = ToDto(current);
-            var payload = JsonSerializer.SerializeToUtf8Bytes(dto, JsonOptions);
+            var candleDto = ToDto(current);
+            var payload = JsonSerializer.SerializeToUtf8Bytes(
+                new BacktestStreamMessageDto<CandleWithIndicatorsResponseDto>("candle", candleDto),
+                JsonOptions);
             await clientSocket.SendAsync(payload, WebSocketMessageType.Text, endOfMessage: true, cancellationToken);
 
             // Persist incremental progress so REST endpoints reflect current state.
@@ -280,6 +309,17 @@ public sealed class BacktestStreamService(
             CurrentSignalLine:   current.Macd?.SignalLine,
             CurrentHistogram:    current.Macd?.Histogram,
             PreviousHistogram:   previous.Macd?.Histogram);
+
+    private static bool CheckBreakeven(Trade trade, KlineData candle, decimal breakevenThreshold)
+    {
+        var entry  = trade.EntryPrice!.Value;
+        var isBuy  = trade.SideId == (int)TradeSide.Buy;
+        var peakPnl = isBuy
+            ? (candle.High - entry) * trade.Quantity
+            : (entry - candle.Low)  * trade.Quantity;
+
+        return peakPnl >= breakevenThreshold;
+    }
 
     private static (TradeCloseReason? Reason, decimal? Price) CheckSlTp(Trade trade, KlineData candle)
     {

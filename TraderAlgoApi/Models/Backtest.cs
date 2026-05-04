@@ -63,7 +63,12 @@ public sealed class Backtest
     [Precision(28, 10)]
     public decimal? TakeProfit { get; set; }
 
+    [Precision(28, 10)]
+    public decimal? Breakeven { get; set; }
+
     public int CandleCount { get; set; }
 
     public ICollection<Trade> Trades { get; set; } = [];
+
+    public ICollection<TradeBot> TradeBots { get; set; } = [];
 }

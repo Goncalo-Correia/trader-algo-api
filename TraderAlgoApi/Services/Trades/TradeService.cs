@@ -216,6 +216,19 @@ public sealed class TradeService(
         return trades.Select(ToDto).ToList();
     }
 
+    public async Task<IReadOnlyList<TradeResponseDto>> GetByBacktestAsync(
+        long backtestId,
+        CancellationToken cancellationToken = default)
+    {
+        var trades = await TradeWithNavigations()
+            .AsNoTracking()
+            .Where(t => t.BacktestId == backtestId)
+            .OrderBy(t => t.CreatedAt)
+            .ToListAsync(cancellationToken);
+
+        return trades.Select(ToDto).ToList();
+    }
+
     public async Task EvaluatePriceAsync(
         string symbol,
         decimal price,
@@ -430,7 +443,8 @@ public sealed class TradeService(
             CloseReason:      t.CloseReasonId is int id ? (TradeCloseReason)id : null,
             Pnl:              t.Pnl,
             UnrealizedPnl:    unrealizedPnl,
-            TradingAccountId: t.TradingAccountId);
+            TradingAccountId: t.TradingAccountId,
+            BacktestId:       t.BacktestId);
     }
 
     private static decimal? CalculatePnl(Trade trade, decimal closedPrice)

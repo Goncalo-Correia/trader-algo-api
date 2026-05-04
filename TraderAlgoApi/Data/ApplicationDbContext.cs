@@ -192,12 +192,34 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         // -------------------------------------------------------------------
         modelBuilder.Entity<TradeBot>(entity =>
         {
-            entity.HasIndex(b => b.TradingAccountId).IsUnique();
+            entity.HasIndex(b => b.TradingAccountId);
+
+            entity.HasIndex(b => b.BacktestId);
+
+            entity.HasIndex(b => b.TradingStrategyId);
+
+            entity.HasIndex(b => b.TradingAccountId)
+                .IsUnique()
+                .HasFilter("\"TradingAccountId\" IS NOT NULL AND \"IsEnabled\"");
+
+            entity.HasIndex(b => b.BacktestId)
+                .IsUnique()
+                .HasFilter("\"BacktestId\" IS NOT NULL AND \"IsEnabled\"");
 
             entity.HasOne(b => b.TradingAccount)
-                .WithOne(a => a.TradeBot)
-                .HasForeignKey<TradeBot>(b => b.TradingAccountId)
+                .WithMany(a => a.TradeBots)
+                .HasForeignKey(b => b.TradingAccountId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(b => b.Backtest)
+                .WithMany(b => b.TradeBots)
+                .HasForeignKey(b => b.BacktestId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(b => b.TradingStrategy)
+                .WithMany()
+                .HasForeignKey(b => b.TradingStrategyId)
+                .OnDelete(DeleteBehavior.Restrict);
 
             entity.HasOne(b => b.Symbol)
                 .WithMany()

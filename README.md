@@ -14,6 +14,8 @@ ASP.NET Core backend API for algorithmic trading — collects K-line data from B
   - [SMA](#sma-simple-moving-average)
   - [RSI](#rsi-relative-strength-index)
   - [MACD](#macd-moving-average-convergence-divergence)
+- [Trade Bots](#trade-bots)
+- [Backtests](#backtests)
 - [Kronos](#kronos)
   - [Overview](#overview)
   - [Models](#models)
@@ -64,6 +66,104 @@ ASP.NET Core backend API for algorithmic trading — collects K-line data from B
 ---
 
 ## API Reference
+
+### Trading Accounts
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/trading-accounts` | Create a trading account |
+| `GET` | `/api/trading-accounts` | List all trading accounts |
+| `GET` | `/api/trading-accounts/{id}` | Get a trading account by ID |
+| `PATCH` | `/api/trading-accounts/{id}` | Update a trading account |
+| `DELETE` | `/api/trading-accounts/{id}` | Delete a trading account |
+
+---
+
+### Trade Bots
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/tradebots` | Create a trade bot |
+| `GET` | `/api/tradebots` | List trade bots (optional `?tradingAccountId=` filter) |
+| `GET` | `/api/tradebots/{id}` | Get a trade bot by ID |
+| `PATCH` | `/api/tradebots/{id}` | Update a trade bot |
+| `POST` | `/api/tradebots/{id}/enable` | Enable a trade bot |
+| `POST` | `/api/tradebots/{id}/disable` | Disable a trade bot |
+
+---
+
+### Backtests
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/backtests` | Create and queue a backtest |
+| `GET` | `/api/backtests` | List all backtests (summary) |
+| `GET` | `/api/backtests/{id}` | Get backtest detail (trades + candles + equity curve) |
+| `DELETE` | `/api/backtests/{id}` | Delete a backtest |
+
+**WebSocket stream**
+
+| Endpoint | Description |
+|---|---|
+| `WS /ws/backtests/{id}/stream` | Stream live candles while a backtest runs |
+
+The stream emits JSON frames with a `type` discriminator:
+
+| `type` | Payload | Description |
+|---|---|---|
+| `candle` | `CandleWithIndicators` | Each processed candle, with SMA / RSI / MACD values |
+| `tradeBracketUpdate` | `{ tradeId, stopLoss, takeProfit }` | Fired when the breakeven rule moves the stop-loss to entry |
+
+**Create backtest request body**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `symbol` | string | Yes | Trading pair (e.g. `BTCUSDT`) |
+| `interval` | string | Yes | Interval code (e.g. `1h`) |
+| `from` | ISO 8601 | Yes | Start of the backtest window |
+| `to` | ISO 8601 | Yes | End of the backtest window |
+| `initialBalance` | decimal | Yes | Starting account balance |
+| `tradingStrategy` | string | No | Strategy name (defaults to account strategy) |
+| `quantity` | decimal | No | Trade size per position |
+| `stopLoss` | decimal | No | Fixed stop-loss distance from entry |
+| `takeProfit` | decimal | No | Fixed take-profit distance from entry |
+| `breakeven` | decimal | No | Minimum unrealised PnL that triggers a move of stop-loss to breakeven |
+
+**Backtest status values:** `Pending` → `Running` → `Completed` / `Cancelled` / `Failed`
+
+---
+
+### Trades
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/trades` | Open a new trade |
+| `POST` | `/api/trades/{id}/stop` | Close an active trade |
+| `PATCH` | `/api/trades/{id}` | Update an active trade (stop-loss / take-profit) |
+| `GET` | `/api/trades/account/{tradingAccountId}/active` | Active trades for a trading account |
+| `GET` | `/api/trades/account/{tradingAccountId}/history` | Closed trades for a trading account |
+| `GET` | `/api/trades/backtest/{backtestId}` | All trades belonging to a backtest |
+
+---
+
+### Rules (Strategy Evaluation)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/rules/sma/evaluate` | Evaluate SMA entry conditions on the latest candle |
+| `GET` | `/api/rules/rsi/evaluate` | Evaluate RSI entry conditions on the latest candle |
+| `GET` | `/api/rules/macd/evaluate` | Evaluate MACD entry conditions on the latest candle |
+
+**Query parameters** (all rule endpoints)
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `symbol` | string | Yes | Trading pair code |
+| `interval` | string | Yes | Interval code |
+
+Each response includes per-rule boolean flags (`shouldEnterLong`, `shouldEnterShort`, and the individual sub-conditions) alongside the raw indicator values used.
+
+---
 
 ### Charts
 
@@ -162,6 +262,46 @@ Uses the **MACD line**, **signal line**, and **histogram**. All three rules must
 | Histogram direction | Histogram **increasing** (shrinking toward zero) | Histogram **decreasing** (shrinking toward zero) |
 
 Bearish momentum is weakening (long): the histogram is still negative but rising, signalling that selling pressure is fading before a crossover. Bullish momentum is weakening (short): the histogram is still positive but falling, signalling that buying pressure is fading before a crossover.
+
+---
+
+## Trade Bots
+
+A trade bot polls for strategy signals on a fixed candle interval and opens/closes trades automatically against a linked trading account.
+
+| Field | Description |
+|---|---|
+| `tradingAccountId` | Account the bot trades on (mutually exclusive with `backtestId`) |
+| `backtestId` | Backtest the bot is scoped to (mutually exclusive with `tradingAccountId`) |
+| `tradingStrategy` | One of `SMA`, `RSI`, `MACD` |
+| `symbol` / `interval` | The market and timeframe to watch |
+| `quantity` | Fixed position size per trade |
+| `stopLoss` / `takeProfit` | Optional bracket distances from entry |
+| `isEnabled` | Toggle on/off without deleting the bot |
+| `lastSignalAt` | Timestamp of the most recent signal evaluation |
+
+The monitor service (`TradeBotMonitorService`) runs in the background and evaluates each enabled bot on every new candle close. Only one active trade is allowed per bot at a time — a new signal is ignored while a position is open. Enabling a bot that is already scoped to a live trading account with an active trade is rejected to prevent double-entry.
+
+---
+
+## Backtests
+
+A backtest replays historical candle data through a strategy and records every simulated trade, the equity curve, and aggregate PnL — all without touching a real account.
+
+**Lifecycle**
+
+1. `POST /api/backtests` creates the record with status `Pending`.
+2. Connect via WebSocket at `WS /ws/backtests/{id}/stream` to start execution. Status moves to `Running`.
+3. The server streams one `candle` frame per 100 ms. SL/TP and breakeven logic runs candle-by-candle, matching intra-candle wicks.
+4. When all candles are processed, status becomes `Completed` and the socket closes normally. Disconnecting early sets status to `Cancelled`.
+
+**Simulation rules**
+
+- Only one trade open at a time (flat before a new entry signal is evaluated).
+- Stop-loss check runs before take-profit; when both are hit intra-candle, SL wins (conservative).
+- If `breakeven` is set, the stop-loss moves to the entry price once unrealised PnL reaches the threshold — a `tradeBracketUpdate` frame is emitted at that moment.
+- Any open trade at the end of the range is force-closed at the last candle's close price.
+- The stream is resumable: reconnecting picks up from the last persisted `candleCount` without re-running already-processed candles.
 
 ---
 

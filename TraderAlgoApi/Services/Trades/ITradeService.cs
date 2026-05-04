@@ -17,6 +17,8 @@ public interface ITradeService
 
     Task<IReadOnlyList<TradeResponseDto>> GetHistoryAsync(long tradingAccountId, CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<TradeResponseDto>> GetByBacktestAsync(long backtestId, CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Called by <see cref="TradeMonitorService"/> on every price tick.
     /// Fills pending limit orders and triggers SL/TP on active trades.

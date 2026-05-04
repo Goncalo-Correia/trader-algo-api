@@ -25,7 +25,7 @@ public sealed class TradeBotSignalService(
         if (context is null)
             return new TradeBotSignalResult(TradeBotSignal.None, "Insufficient candle data.");
 
-        ITradingRule? rule = (TradingStrategy)tradeBot.TradingAccount.TradingStrategyId switch
+        ITradingRule? rule = (TradingStrategy)tradeBot.TradingStrategyId switch
         {
             TradingStrategy.Sma => smaRule,
             TradingStrategy.Rsi => rsiRule,

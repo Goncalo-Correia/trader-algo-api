@@ -22,6 +22,7 @@ public sealed record BacktestDetailResponseDto(
     [property: JsonPropertyName("quantity")]       decimal Quantity,
     [property: JsonPropertyName("stopLoss")]       decimal? StopLoss,
     [property: JsonPropertyName("takeProfit")]     decimal? TakeProfit,
+    [property: JsonPropertyName("breakeven")]      decimal? Breakeven,
     [property: JsonPropertyName("candleCount")]    int CandleCount,
     [property: JsonPropertyName("trades")]         IReadOnlyList<TradeResponseDto> Trades,
     [property: JsonPropertyName("candles")]        IReadOnlyList<CandleWithIndicatorsResponseDto> Candles,

@@ -11,4 +11,6 @@ public interface ITradingAccountService
     Task<TradingAccountResponseDto> GetByIdAsync(long id, CancellationToken cancellationToken = default);
 
     Task<TradingAccountResponseDto> UpdateAsync(long id, UpdateTradingAccountRequestDto request, CancellationToken cancellationToken = default);
+
+    Task DeleteAsync(long id, CancellationToken cancellationToken = default);
 }
