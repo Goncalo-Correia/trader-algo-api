@@ -16,4 +16,5 @@ public sealed record CreateBacktestRequestDto(
     [property: JsonPropertyName("breakeven")]       decimal? Breakeven = null,
     [property: JsonPropertyName("isNySessionOnly")] bool IsNySessionOnly = false,
     [property: JsonPropertyName("dailyProfitGoal")] decimal? DailyProfitGoal = null,
-    [property: JsonPropertyName("maxLossesPerDay")] int? MaxLossesPerDay = null);
+    [property: JsonPropertyName("maxLossesPerDay")]   int? MaxLossesPerDay = null,
+    [property: JsonPropertyName("maxCandlesPerTrade")] int? MaxCandlesPerTrade = null);

@@ -56,6 +56,7 @@ public sealed class BacktestService(
             IsNySessionOnly   = request.IsNySessionOnly,
             DailyProfitGoal   = request.DailyProfitGoal,
             MaxLossesPerDay   = request.MaxLossesPerDay,
+            MaxCandlesPerTrade = request.MaxCandlesPerTrade,
             From              = request.From,
             To                = request.To,
             StartedAt         = now,
@@ -176,6 +177,7 @@ public sealed class BacktestService(
             IsNySessionOnly: backtest.IsNySessionOnly,
             DailyProfitGoal: backtest.DailyProfitGoal,
             MaxLossesPerDay: backtest.MaxLossesPerDay,
+            MaxCandlesPerTrade: backtest.MaxCandlesPerTrade,
             CandleCount:    backtest.CandleCount,
             Trades:         tradeDtos,
             Candles:        candles,
@@ -282,6 +284,7 @@ public sealed class BacktestService(
             IsNySessionOnly: b.IsNySessionOnly,
             DailyProfitGoal: b.DailyProfitGoal,
             MaxLossesPerDay: b.MaxLossesPerDay,
+            MaxCandlesPerTrade: b.MaxCandlesPerTrade,
             CandleCount:    b.CandleCount,
             TradeCount:     tradeCount);
 
