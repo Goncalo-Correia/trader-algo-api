@@ -41,6 +41,9 @@ namespace TraderAlgoApi.Migrations
                     b.Property<bool>("IsNySessionOnly")
                         .HasColumnType("boolean");
 
+                    b.Property<int?>("MaxCandlesPerTrade")
+                        .HasColumnType("integer");
+
                     b.Property<int?>("MaxLossesPerDay")
                         .HasColumnType("integer");
 

@@ -73,6 +73,8 @@ public sealed class Backtest
 
     public int? MaxLossesPerDay { get; set; }
 
+    public int? MaxCandlesPerTrade { get; set; }
+
     public int CandleCount { get; set; }
 
     public ICollection<Trade> Trades { get; set; } = [];

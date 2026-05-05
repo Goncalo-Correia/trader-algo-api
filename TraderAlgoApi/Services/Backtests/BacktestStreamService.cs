@@ -178,6 +178,15 @@ public sealed class BacktestStreamService(
         // Skip already-emitted candles; always need at least 2 items before current.
         var startIndex = Math.Max(2, priorCandles.Count + backtest.CandleCount);
 
+        // Restore candle-age of a resumed open trade so MaxCandlesPerTrade still fires correctly.
+        var openTradeCandles = 0;
+        if (openTrade is not null && backtest.MaxCandlesPerTrade.HasValue && openTrade.OpenedAt.HasValue)
+        {
+            openTradeCandles = rangeCandles.Count(
+                k => k.OpenTime >= openTrade.OpenedAt.Value &&
+                     k.OpenTime < combined[startIndex].OpenTime);
+        }
+
         for (var i = startIndex; i < combined.Count; i++)
         {
             var current      = combined[i];
@@ -187,6 +196,10 @@ public sealed class BacktestStreamService(
             var context = BuildContext(
                 backtest.Symbol.Code, backtest.Interval.Code,
                 secondPrev, previous, current);
+
+            // Advance per-trade candle counter.
+            if (openTrade is not null)
+                openTradeCandles++;
 
             // Check SL/TP on any open trade before evaluating signals.
             if (openTrade is not null)
@@ -207,7 +220,28 @@ public sealed class BacktestStreamService(
                         stats.Losses + ((openTrade.Pnl ?? 0m) < 0 ? 1 : 0));
 
                     openTrade = null;
+                    openTradeCandles = 0;
                 }
+            }
+
+            // Close by candle age when SL/TP didn't fire first.
+            if (openTrade is not null &&
+                backtest.MaxCandlesPerTrade.HasValue &&
+                openTradeCandles >= backtest.MaxCandlesPerTrade.Value)
+            {
+                CloseTrade(openTrade, current.Close, TradeCloseReason.Manual, current.OpenTime, ref balance);
+                await dbContext.SaveChangesAsync(cancellationToken);
+
+                var closeDay = DateOnly.FromDateTime(
+                    TimeZoneInfo.ConvertTime(openTrade.ClosedAt!.Value, EasternZone).DateTime);
+                if (!dailyStats.TryGetValue(closeDay, out var dayStats))
+                    dayStats = (0m, 0);
+                dailyStats[closeDay] = (
+                    dayStats.Pnl + (openTrade.Pnl ?? 0m),
+                    dayStats.Losses + ((openTrade.Pnl ?? 0m) < 0 ? 1 : 0));
+
+                openTrade = null;
+                openTradeCandles = 0;
             }
 
             // Check breakeven trigger on the surviving open trade.
@@ -265,6 +299,7 @@ public sealed class BacktestStreamService(
                     };
                     dbContext.Trades.Add(openTrade);
                     await dbContext.SaveChangesAsync(cancellationToken);
+                    openTradeCandles = 1;
                 }
             }
 
@@ -309,6 +344,10 @@ public sealed class BacktestStreamService(
 
         if (backtest.IsNySessionOnly)
         {
+            var dow = easternTime.DayOfWeek;
+            if (dow == DayOfWeek.Saturday || dow == DayOfWeek.Sunday)
+                return false;
+
             var tod = TimeOnly.FromDateTime(easternTime.DateTime);
             if (tod < NyOpen || tod >= NyClose)
                 return false;
