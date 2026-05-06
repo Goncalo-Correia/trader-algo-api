@@ -4,6 +4,7 @@ using TraderAlgoApi.Services.Rules;
 using TraderAlgoApi.Services.Rules.Macd;
 using TraderAlgoApi.Services.Rules.Rsi;
 using TraderAlgoApi.Services.Rules.Sma;
+using TraderAlgoApi.Services.Rules.SmaMacd;
 
 namespace TraderAlgoApi.Services.TradeBots;
 
@@ -11,7 +12,8 @@ public sealed class TradeBotSignalService(
     ITradingRuleContextService contextService,
     SmaTradingRule smaRule,
     RsiTradingRule rsiRule,
-    MacdTradingRule macdRule) : ITradeBotSignalService
+    MacdTradingRule macdRule,
+    SmaMacdTradingRule smaMacdRule) : ITradeBotSignalService
 {
     public async Task<TradeBotSignalResult> EvaluateAsync(
         TradeBot tradeBot,
@@ -27,9 +29,10 @@ public sealed class TradeBotSignalService(
 
         ITradingRule? rule = (TradingStrategy)tradeBot.TradingStrategyId switch
         {
-            TradingStrategy.Sma => smaRule,
-            TradingStrategy.Rsi => rsiRule,
-            TradingStrategy.Macd => macdRule,
+            TradingStrategy.Sma     => smaRule,
+            TradingStrategy.Rsi     => rsiRule,
+            TradingStrategy.Macd    => macdRule,
+            TradingStrategy.SmaMacd => smaMacdRule,
             _ => null
         };
 

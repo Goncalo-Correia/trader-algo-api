@@ -13,6 +13,7 @@ using TraderAlgoApi.Services.Rules;
 using TraderAlgoApi.Services.Rules.Macd;
 using TraderAlgoApi.Services.Rules.Rsi;
 using TraderAlgoApi.Services.Rules.Sma;
+using TraderAlgoApi.Services.Rules.SmaMacd;
 using TraderAlgoApi.Services.MarketData;
 using TraderAlgoApi.Services.TradeBots;
 using TraderAlgoApi.Services.TradeEvents;
@@ -50,6 +51,7 @@ builder.Services.AddScoped<ITradingRuleContextService, TradingRuleContextService
 builder.Services.AddSingleton<SmaTradingRule>();
 builder.Services.AddSingleton<RsiTradingRule>();
 builder.Services.AddSingleton<MacdTradingRule>();
+builder.Services.AddSingleton<SmaMacdTradingRule>();
 builder.Services.AddScoped<IBacktestService, BacktestService>();
 builder.Services.AddScoped<IBacktestStreamService, BacktestStreamService>();
 builder.Services.AddScoped<ITradeBotService, TradeBotService>();
