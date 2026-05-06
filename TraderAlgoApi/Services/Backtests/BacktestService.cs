@@ -28,9 +28,7 @@ public sealed class BacktestService(
             throw new ArgumentException("'from' must be earlier than 'to'.");
 
         var templateBot = await LoadTemplateBotAsync(request, cancellationToken);
-        var tradingStrategyId = request.TradingStrategy.HasValue
-            ? (int)request.TradingStrategy.Value
-            : templateBot.TradingStrategyId;
+        var tradingStrategyId = request.TradingStrategyId ?? templateBot.TradingStrategyId;
         var quantity = request.Quantity ?? templateBot.Quantity;
         var stopLoss = request.StopLoss ?? templateBot.StopLoss;
         var takeProfit = request.TakeProfit ?? templateBot.TakeProfit;
@@ -213,11 +211,11 @@ public sealed class BacktestService(
         CreateBacktestRequestDto request,
         CancellationToken cancellationToken)
     {
-        if (request.TradingStrategy.HasValue && request.Quantity.HasValue)
+        if (request.TradingStrategyId.HasValue && request.Quantity.HasValue)
         {
             return new TradeBot
             {
-                TradingStrategyId = (int)request.TradingStrategy.Value,
+                TradingStrategyId = request.TradingStrategyId.Value,
                 Quantity = request.Quantity.Value,
                 StopLoss = request.StopLoss,
                 TakeProfit = request.TakeProfit

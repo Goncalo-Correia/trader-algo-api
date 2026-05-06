@@ -4,8 +4,10 @@ using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
 using TraderAlgoApi.Dtos.Backtests;
 using TraderAlgoApi.Dtos.Charts;
+using TraderAlgoApi.Dtos.Ml;
 using TraderAlgoApi.Models;
 using TraderAlgoApi.Models.Enums;
+using TraderAlgoApi.Services.Ml;
 using TraderAlgoApi.Services.Rules;
 using TraderAlgoApi.Services.Rules.Macd;
 using TraderAlgoApi.Services.Rules.Rsi;
@@ -20,6 +22,8 @@ public sealed class BacktestStreamService(
     RsiTradingRule rsiTradingRule,
     MacdTradingRule macdTradingRule,
     SmaMacdTradingRule smaMacdTradingRule,
+    IMlConnectorService mlConnector,
+    MlConnectorOptions mlOptions,
     TimeProvider timeProvider,
     ILogger<BacktestStreamService> logger) : IBacktestStreamService
 {
@@ -286,10 +290,19 @@ public sealed class BacktestStreamService(
             if (openTrade is null && CanEnterToday(backtest, current.OpenTime, dailyStats))
             {
                 TradeSide? side = null;
-                if (rule.ShouldEnterLong(context))
-                    side = TradeSide.Buy;
-                else if (rule.ShouldEnterShort(context))
-                    side = TradeSide.Sell;
+
+                if (rule is not null)
+                {
+                    if (rule.ShouldEnterLong(context))
+                        side = TradeSide.Buy;
+                    else if (rule.ShouldEnterShort(context))
+                        side = TradeSide.Sell;
+                }
+                else
+                {
+                    // MlPolicy: ask the sidecar for a decision
+                    side = await DecideViaMlAsync(backtest, context, current, cancellationToken);
+                }
 
                 if (side.HasValue)
                 {
@@ -396,12 +409,51 @@ public sealed class BacktestStreamService(
         return true;
     }
 
-    private ITradingRule SelectRule(int strategyId) => strategyId switch
+    private async Task<TradeSide?> DecideViaMlAsync(
+        Backtest backtest,
+        TradingRuleContext context,
+        KlineData current,
+        CancellationToken cancellationToken)
+    {
+        var request = new MlDecideRequest(
+            Symbol:   backtest.Symbol.Code,
+            Interval: backtest.Interval.Code,
+            ModelId:  mlOptions.ModelId,
+            Candle: new MlCandleFeatures(
+                Open:           context.CurrentOpen,
+                High:           context.CurrentHigh,
+                Low:            context.CurrentLow,
+                Close:          context.CurrentClose,
+                Volume:         current.Volume,
+                TakerBuyVolume: current.TakerBuyBaseAssetVolume,
+                Sma20:          context.CurrentSma20,
+                Sma100:         context.CurrentSma100,
+                Rsi:            context.CurrentRsi,
+                RsiSmooth:      context.CurrentRsiSmooth,
+                MacdLine:       context.CurrentMacdLine,
+                SignalLine:     context.CurrentSignalLine,
+                Histogram:      context.CurrentHistogram),
+            Position:      0,
+            CandlesHeld:   0,
+            UnrealizedPnl: 0m);
+
+        var response = await mlConnector.DecideAsync(request, cancellationToken);
+
+        return response.Action switch
+        {
+            1 => TradeSide.Buy,   // EnterLong
+            2 => TradeSide.Sell,  // EnterShort
+            _ => null             // Hold or Close
+        };
+    }
+
+    private ITradingRule? SelectRule(int strategyId) => strategyId switch
     {
         1 => smaTradingRule,
         2 => rsiTradingRule,
         3 => macdTradingRule,
         4 => smaMacdTradingRule,
+        5 => null, // MlPolicy: handled by mlConnector in the simulation loop
         _ => throw new ArgumentException($"Unknown strategy id {strategyId}.")
     };
 
