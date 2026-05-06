@@ -22,6 +22,7 @@ ASP.NET Core backend API for algorithmic trading — collects K-line data from B
   - [SMA](#sma-simple-moving-average)
   - [RSI](#rsi-relative-strength-index)
   - [MACD](#macd-moving-average-convergence-divergence)
+  - [SMA MACD](#sma-macd)
 - [Trade Bots](#trade-bots)
 - [Backtests](#backtests)
 - [Kronos](#kronos)
@@ -430,6 +431,21 @@ Uses the **MACD line**, **signal line**, and **histogram**. All three rules must
 | Histogram direction | Histogram **increasing** (shrinking toward zero) | Histogram **decreasing** (shrinking toward zero) |
 
 Bearish momentum is weakening (long): the histogram is still negative but rising, signalling that selling pressure is fading before a crossover. Bullish momentum is weakening (short): the histogram is still positive but falling, signalling that buying pressure is fading before a crossover.
+
+---
+
+### SMA MACD
+
+Combines the SMA trend filter with MACD momentum. The SMA determines directional bias; the MACD line and histogram confirm the entry timing. All four rules must be true simultaneously to enter.
+
+| Rule | Long | Short |
+|---|---|---|
+| Trend filter | SMA20 **above** SMA100 | SMA20 **below** SMA100 |
+| MACD line | MACD line **above zero** | MACD line **below zero** |
+| Histogram side | Histogram **below zero** | Histogram **above zero** |
+| Histogram direction | Histogram **increasing** (prev < current) | Histogram **decreasing** (prev > current) |
+
+Long: price is in an uptrend (SMA filter) and MACD is bullish, but the histogram is still negative and rising — momentum is building before the histogram crosses zero. Short: price is in a downtrend (SMA filter) and MACD is bearish, but the histogram is still positive and falling — momentum is weakening before the histogram crosses zero.
 
 ---
 
