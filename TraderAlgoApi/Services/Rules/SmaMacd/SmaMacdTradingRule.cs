@@ -6,6 +6,10 @@ public sealed class SmaMacdTradingRule : ITradingRule
         context.CurrentSma20.HasValue && context.CurrentSma100.HasValue &&
         context.CurrentSma20.Value > context.CurrentSma100.Value;
 
+    public bool IsSma20BelowSma100(TradingRuleContext context) =>
+        context.CurrentSma20.HasValue && context.CurrentSma100.HasValue &&
+        context.CurrentSma20.Value < context.CurrentSma100.Value;
+
     public bool IsMacdLineAboveZero(TradingRuleContext context) =>
         context.CurrentMacdLine.HasValue && context.CurrentMacdLine.Value > 0m;
 
