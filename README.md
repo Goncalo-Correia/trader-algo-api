@@ -441,11 +441,12 @@ Combines the SMA trend filter with MACD momentum. The SMA determines directional
 | Rule | Long | Short |
 |---|---|---|
 | Trend filter | SMA20 **above** SMA100 | SMA20 **below** SMA100 |
+| Price location | Close **above** SMA20 | Close **below** SMA20 |
 | MACD line | MACD line **above zero** | MACD line **below zero** |
 | Histogram side | Histogram **below zero** | Histogram **above zero** |
 | Histogram direction | Histogram **increasing** (prev < current) | Histogram **decreasing** (prev > current) |
 
-Long: price is in an uptrend (SMA filter) and MACD is bullish, but the histogram is still negative and rising — momentum is building before the histogram crosses zero. Short: price is in a downtrend (SMA filter) and MACD is bearish, but the histogram is still positive and falling — momentum is weakening before the histogram crosses zero.
+Long: price is in an uptrend (SMA filter), close is above SMA20 confirming price is on the correct side of the moving average, and MACD is bullish but the histogram is still negative and rising — momentum is building before the histogram crosses zero. Short: price is in a downtrend (SMA filter), close is below SMA20 confirming price is on the correct side of the moving average, and MACD is bearish but the histogram is still positive and falling — momentum is weakening before the histogram crosses zero.
 
 ---
 
