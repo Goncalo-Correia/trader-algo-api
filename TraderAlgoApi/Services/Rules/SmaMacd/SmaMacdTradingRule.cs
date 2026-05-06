@@ -30,16 +30,26 @@ public sealed class SmaMacdTradingRule : ITradingRule
         context.PreviousHistogram.HasValue && context.CurrentHistogram.HasValue &&
         context.PreviousHistogram.Value > context.CurrentHistogram.Value;
 
-    // SMA confirms uptrend; MACD is bullish but histogram is still negative and rising.
+    public bool IsPriceAboveSma20(TradingRuleContext context) =>
+        context.CurrentSma20.HasValue &&
+        context.CurrentClose > context.CurrentSma20.Value;
+
+    public bool IsPriceBelowSma20(TradingRuleContext context) =>
+        context.CurrentSma20.HasValue &&
+        context.CurrentClose < context.CurrentSma20.Value;
+
+    // SMA confirms uptrend; price above SMA20; MACD is bullish but histogram is still negative and rising.
     public bool ShouldEnterLong(TradingRuleContext context) =>
         IsSma20AboveSma100(context) &&
+        IsPriceAboveSma20(context) &&
         IsMacdLineAboveZero(context) &&
         IsHistogramBelowZero(context) &&
         IsHistogramIncreasing(context);
 
-    // SMA confirms downtrend; MACD is bearish but histogram is still positive and falling.
+    // SMA confirms downtrend; price below SMA20; MACD is bearish but histogram is still positive and falling.
     public bool ShouldEnterShort(TradingRuleContext context) =>
         IsSma20BelowSma100(context) &&
+        IsPriceBelowSma20(context) &&
         IsMacdLineBelowZero(context) &&
         IsHistogramAboveZero(context) &&
         IsHistogramDecreasing(context);
