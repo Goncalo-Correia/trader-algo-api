@@ -7,6 +7,7 @@ using TraderAlgoApi.Services.Charts;
 using TraderAlgoApi.Services.DataCollector;
 using TraderAlgoApi.Services.Indicators;
 using TraderAlgoApi.Services.Kronos;
+using TraderAlgoApi.Services.Ml;
 using TraderAlgoApi.Services.PriceFeeds;
 using TraderAlgoApi.Services.Session;
 using TraderAlgoApi.Services.Rules;
@@ -85,6 +86,15 @@ builder.Services.AddHttpClient("Kronos", client =>
 });
 builder.Services.AddScoped<IKronosConnectorService, KronosConnectorService>();
 builder.Services.AddScoped<IKronosPredictService, KronosPredictService>();
+builder.Services.AddHttpClient("MlPolicy", client =>
+{
+    var baseUrl = builder.Configuration["MlPolicy:BaseUrl"] ?? "http://localhost:8766";
+    client.BaseAddress = new Uri(baseUrl);
+    client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+});
+builder.Services.AddSingleton(new MlConnectorOptions(
+    ModelId: builder.Configuration["MlPolicy:ModelId"] ?? "ppo-v1"));
+builder.Services.AddScoped<IMlConnectorService, MlConnectorService>();
 
 var app = builder.Build();
 

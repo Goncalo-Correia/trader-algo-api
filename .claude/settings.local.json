@@ -11,7 +11,13 @@
       "Bash(git fetch *)",
       "Bash(git checkout *)",
       "Bash(git pull *)",
-      "Bash(git merge *)"
+      "Bash(git merge *)",
+      "Bash(grep -E \"\\\\.\\(ts|js|html|angular|vue\\)$\")",
+      "Bash(npx ng *)",
+      "Bash(grep -E \"\\\\.\\(cs|sql\\)$\")",
+      "Bash(grep -E \"\\\\.cs$\")",
+      "Bash(git -C C:\\\\Users\\\\thirt\\\\repos\\\\trader-algo-api status)",
+      "Bash(git -C C:\\\\Users\\\\thirt\\\\repos\\\\trader-algo-api branch -a)"
     ]
   }
 }
