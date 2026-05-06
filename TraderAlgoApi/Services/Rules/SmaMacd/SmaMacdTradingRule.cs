@@ -33,9 +33,9 @@ public sealed class SmaMacdTradingRule : ITradingRule
         IsHistogramBelowZero(context) &&
         IsHistogramIncreasing(context);
 
-    // SMA confirms uptrend; MACD is bearish but histogram is still positive and falling.
+    // SMA confirms downtrend; MACD is bearish but histogram is still positive and falling.
     public bool ShouldEnterShort(TradingRuleContext context) =>
-        IsSma20AboveSma100(context) &&
+        IsSma20BelowSma100(context) &&
         IsMacdLineBelowZero(context) &&
         IsHistogramAboveZero(context) &&
         IsHistogramDecreasing(context);
