@@ -80,4 +80,15 @@ public sealed class TradeBotsController(ITradeBotService tradeBotService) : Cont
         }
         catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
     }
+
+    [HttpDelete("{id:long}")]
+    public async Task<IActionResult> Delete(long id, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await tradeBotService.DeleteAsync(id, cancellationToken);
+            return NoContent();
+        }
+        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
+    }
 }

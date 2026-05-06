@@ -10,6 +10,7 @@ using TraderAlgoApi.Services.Rules;
 using TraderAlgoApi.Services.Rules.Macd;
 using TraderAlgoApi.Services.Rules.Rsi;
 using TraderAlgoApi.Services.Rules.Sma;
+using TraderAlgoApi.Services.Rules.SmaMacd;
 
 namespace TraderAlgoApi.Services.Backtests;
 
@@ -18,6 +19,7 @@ public sealed class BacktestStreamService(
     SmaTradingRule smaTradingRule,
     RsiTradingRule rsiTradingRule,
     MacdTradingRule macdTradingRule,
+    SmaMacdTradingRule smaMacdTradingRule,
     TimeProvider timeProvider,
     ILogger<BacktestStreamService> logger) : IBacktestStreamService
 {
@@ -114,6 +116,7 @@ public sealed class BacktestStreamService(
         finally
         {
             await monitorTask;
+            await DeleteLinkedTradeBotAsync(backtest.Id);
         }
     }
 
@@ -140,7 +143,12 @@ public sealed class BacktestStreamService(
             .OrderBy(k => k.OpenTime)
             .ToListAsync(cancellationToken);
 
-        var priorCandles = await dbContext.KlineData
+        if (backtest.IsNySessionOnly)
+            rangeCandles = rangeCandles.Where(IsNySessionCandle).ToList();
+
+        // When NY-session-only, fetch enough prior candles to find 2 that fall within session hours.
+        var priorLookback = backtest.IsNySessionOnly ? 20 : 2;
+        var priorCandlesRaw = await dbContext.KlineData
             .AsNoTracking()
             .Where(k => k.SymbolId == backtest.SymbolId &&
                         k.IntervalId == backtest.IntervalId &&
@@ -149,9 +157,13 @@ public sealed class BacktestStreamService(
             .Include(k => k.RelativeStrengthIndex)
             .Include(k => k.Macd)
             .OrderByDescending(k => k.OpenTime)
-            .Take(2)
+            .Take(priorLookback)
             .OrderBy(k => k.OpenTime)
             .ToListAsync(cancellationToken);
+
+        var priorCandles = backtest.IsNySessionOnly
+            ? priorCandlesRaw.Where(IsNySessionCandle).TakeLast(2).ToList()
+            : priorCandlesRaw;
 
         // [prior0, prior1, range0, range1, ...]
         var combined = priorCandles.Concat(rangeCandles).ToList();
@@ -335,6 +347,22 @@ public sealed class BacktestStreamService(
     // Helpers
     // -------------------------------------------------------------------------
 
+    private async Task DeleteLinkedTradeBotAsync(long backtestId)
+    {
+        await dbContext.TradeBots
+            .Where(b => b.BacktestId == backtestId)
+            .ExecuteDeleteAsync(CancellationToken.None);
+    }
+
+    private static bool IsNySessionCandle(KlineData k)
+    {
+        var eastern = TimeZoneInfo.ConvertTime(k.OpenTime, EasternZone);
+        if (eastern.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+            return false;
+        var tod = TimeOnly.FromDateTime(eastern.DateTime);
+        return tod >= NyOpen && tod < NyClose;
+    }
+
     private static bool CanEnterToday(
         Backtest backtest,
         DateTimeOffset candleTime,
@@ -373,6 +401,7 @@ public sealed class BacktestStreamService(
         1 => smaTradingRule,
         2 => rsiTradingRule,
         3 => macdTradingRule,
+        4 => smaMacdTradingRule,
         _ => throw new ArgumentException($"Unknown strategy id {strategyId}.")
     };
 

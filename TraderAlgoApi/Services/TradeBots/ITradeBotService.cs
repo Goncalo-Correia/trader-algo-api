@@ -13,4 +13,6 @@ public interface ITradeBotService
     Task<TradeBotResponseDto> UpdateAsync(long id, UpdateTradeBotRequestDto request, CancellationToken cancellationToken = default);
 
     Task<TradeBotResponseDto> SetEnabledAsync(long id, bool isEnabled, CancellationToken cancellationToken = default);
+
+    Task DeleteAsync(long id, CancellationToken cancellationToken = default);
 }

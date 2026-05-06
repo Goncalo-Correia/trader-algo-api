@@ -152,6 +152,21 @@ public sealed class TradeBotService(
         return ToDto(tradeBot);
     }
 
+    public async Task DeleteAsync(long id, CancellationToken cancellationToken = default)
+    {
+        var tradeBot = await TradeBotWithNavigations()
+            .FirstOrDefaultAsync(b => b.Id == id, cancellationToken)
+            ?? throw new KeyNotFoundException($"Tradebot {id} not found.");
+
+        var wasEnabled = tradeBot.IsEnabled;
+
+        dbContext.TradeBots.Remove(tradeBot);
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        if (wasEnabled)
+            PublishBotStatusEvent(tradeBot);
+    }
+
     private IQueryable<TradeBot> TradeBotWithNavigations() =>
         dbContext.TradeBots
             .Include(b => b.TradingAccount)

@@ -9,6 +9,14 @@ ASP.NET Core backend API for algorithmic trading — collects K-line data from B
 ## Table of Contents
 
 - [Architecture](#architecture)
+- [Data Streaming](#data-streaming)
+  - [Live Kline Ingest](#1-live-kline-ingest)
+  - [Price Tick Monitor](#2-price-tick-monitor)
+  - [Bot Signal Evaluation](#3-bot-signal-evaluation)
+  - [Trade Event Stream](#4-trade-event-stream)
+  - [Live Chart Streams](#5-live-chart-streams)
+  - [Backtest Simulation Stream](#6-backtest-simulation-stream)
+  - [Daily Data Collection](#7-daily-data-collection)
 - [API Reference](#api-reference)
 - [Trading Strategies](#trading-strategies)
   - [SMA](#sma-simple-moving-average)
@@ -65,6 +73,165 @@ ASP.NET Core backend API for algorithmic trading — collects K-line data from B
 
 ---
 
+## Data Streaming
+
+Seven independent streaming pipelines run concurrently. All real-time work is channelled through two singleton event buses — `PriceFeed` (every tick) and `ClosedCandleFeed` (per closed candle) — so producers and consumers are fully decoupled.
+
+---
+
+### 1. Live Kline Ingest
+
+One persistent Binance WebSocket stream per active `symbol × interval` combination. Every incoming frame publishes a price tick; only closed-candle frames are persisted and forwarded downstream.
+
+```mermaid
+flowchart TD
+    A["Binance WebSocket\nwss://stream.binance.com\none stream per symbol/interval"] -->|JSON kline frame| B[BinanceKlineStreamingService\nBackgroundService]
+    B -->|Every tick\nPublish symbol + close| C[PriceFeed\nSingleton event bus]
+    B --> D{IsClosed?}
+    D -->|No| E[Discard]
+    D -->|Yes| F[Upsert KlineData\nPostgreSQL]
+    F --> G[IndicatorSyncService\nCompute SMA / RSI / MACD]
+    G --> H[ClosedCandleFeed\nSingleton event bus]
+    C --> I[TradeMonitorService]
+    H --> J[TradeBotMonitorService]
+```
+
+> If the connection drops, `BinanceKlineStreamingService` automatically reconnects after a 5-second back-off.
+
+---
+
+### 2. Price Tick Monitor
+
+Every price tick from `PriceFeed` is queued into a bounded channel and consumed sequentially. This handles pending limit-order fills and active SL/TP triggers on live trades.
+
+```mermaid
+flowchart LR
+    A[PriceFeed\nTickReceived event] -->|symbol + price| B["Channel&lt;string, decimal&gt;\nbounded 64 · DropOldest"]
+    B -->|ReadAllAsync| C[TradeMonitorService\nBackgroundService]
+    C -->|per tick| D[ITradeService\n.EvaluatePriceAsync]
+    D --> E{Pending limit\norder?}
+    E -->|Price matches| F[Fill → Active]
+    E -->|No| G{Active trade\nSL / TP hit?}
+    G -->|Yes| H[Close trade\n+ publish event]
+    G -->|No| I[No action]
+```
+
+---
+
+### 3. Bot Signal Evaluation
+
+On every closed candle, each enabled live trade bot is evaluated against its strategy. A new trade is opened, the opposite-direction trade is closed, or the signal is ignored depending on existing position state.
+
+```mermaid
+flowchart TD
+    A[ClosedCandleFeed\nCandleClosed event] -->|ClosedCandleEvent| B["Channel&lt;ClosedCandleEvent&gt;\nbounded 64 · DropOldest"]
+    B -->|ReadAllAsync| C[TradeBotMonitorService\nBackgroundService]
+    C --> D[Load enabled bots\nmatching symbol + interval]
+    D --> E[TradeBotSignalService\n.EvaluateAsync]
+    E --> F[TradingRuleContextService\nLoad last 3 candles\n+ all indicators]
+    F --> G{Trading rule\nSMA / RSI / MACD / SMA MACD}
+    G --> H{Signal?}
+    H -->|None| I[No action]
+    H -->|EnterLong or EnterShort| J{Open trade\nexists?}
+    J -->|No trade| K[ITradeService\n.CreateAsync]
+    J -->|Opposite direction| L[ITradeService\n.CloseAsync]
+    J -->|Same direction\nor pending| M[TradeEventPublisher\nSignalIgnored]
+    K --> N[TradeEventPublisher\n.Publish]
+    L --> N
+```
+
+---
+
+### 4. Trade Event Stream
+
+`TradeEventPublisher` is a singleton pub/sub bus. Any service can call `Publish()`; each connected WebSocket client holds its own bounded channel and receives only the events that match its `tradingAccountId` filter.
+
+```mermaid
+flowchart LR
+    A[TradeBotMonitorService] -->|TradeEventDto| P
+    B[ITradeService] -->|TradeEventDto| P
+    C[TradeBotService] -->|TradeEventDto| P
+    P[TradeEventPublisher\nSingleton] --> D["ConcurrentDictionary\nof subscriber channels\nbounded 32 · DropOldest"]
+    D -->|per subscriber| E[TradeEventStreamService]
+    E -->|JSON frame\nover WebSocket| F["Client\nWS /ws/tradebots/events\n?tradingAccountId="]
+```
+
+---
+
+### 5. Live Chart Streams
+
+Two proxied WebSocket endpoints stream candle data directly from Binance to the frontend client. The `candleswithindicators` variant enriches each candle with stored SMA / RSI / MACD values before forwarding.
+
+```mermaid
+flowchart TD
+    CA["Client A\nWS /ws/charts/candles\n?symbol=&interval="] -->|WebSocket upgrade| S1[LiveChartDataService\n.StreamCandlesAsync]
+    S1 -->|Validate symbol + interval| B1[BinanceMarketDataService\n.StreamKlineCandlesAsync]
+    B1 -->|Proxy kline frames| CA
+
+    CB["Client B\nWS /ws/charts/candleswithindicators\n?symbol=&interval="] -->|WebSocket upgrade| S2[LiveChartDataService\n.StreamCandlesWithIndicatorsAsync]
+    S2 -->|Validate symbol + interval| B2[BinanceMarketDataService\n.StreamKlineCandlesWithIndicatorsAsync]
+    B2 -->|Candle + SMA / RSI / MACD| CB
+```
+
+> If `symbol` or `interval` are omitted the default values from the database are used. An invalid interval returns `400` before the WebSocket upgrade is accepted.
+
+---
+
+### 6. Backtest Simulation Stream
+
+The client drives execution by holding the WebSocket open. Candles are replayed at 100 ms per bar. The stream is fully resumable — reconnecting skips already-processed candles and restores open trade state. The linked trade bot is deleted once the backtest reaches any terminal status.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Server as BacktestStreamService
+    participant DB as PostgreSQL
+
+    Client->>Server: WS /ws/charts/backtest?backtestId=
+    Server->>DB: Load Backtest record
+    Server-->>Client: 400 if status is not Pending / Running
+    Server->>DB: Status = Running
+    Server->>DB: Load historical candles (From → To) + prior context
+    loop Every candle — 100 ms pacing
+        Server->>Server: Check SL / TP on open trade
+        Server->>Server: Check breakeven trigger
+        Server->>Server: Evaluate entry signal (strategy rule)
+        Server->>DB: Persist trade state + running balance
+        Server->>Client: { type: "candle", data: CandleWithIndicators }
+        Note over Server,Client: type "tradeBracketUpdate" emitted<br/>when breakeven moves stop-loss
+    end
+    Server->>DB: Status = Completed / Cancelled / Failed
+    Server->>DB: Delete linked TradeBot
+    Server->>Client: WS Close (normal closure)
+```
+
+| Terminal status | Trigger |
+|---|---|
+| `Completed` | All candles processed successfully |
+| `Cancelled` | Client disconnected or external cancellation token fired |
+| `Failed` | Unhandled exception during simulation |
+
+---
+
+### 7. Daily Data Collection
+
+`DataCollectorTimer` sleeps until the next midnight UTC, then runs a full upsert for every active `symbol × interval` pair. Indicator values are recomputed for any inserted or updated candle.
+
+```mermaid
+flowchart TD
+    A[DataCollectorTimer\nBackgroundService] -->|"Sleep until\nnext midnight UTC"| B[CollectAllAsync]
+    B --> C["For each active\nsymbol × interval"]
+    C --> D[DataCollectorService\n.CollectKlinesAsync]
+    D --> E[BinanceMarketDataService\n.GetKlinesAsync\nREST API]
+    E --> F[Upsert KlineData\nPostgreSQL]
+    F --> G[IndicatorSyncService\n.ComputeAndSaveAsync\nSMA / RSI / MACD]
+    G -->|Next pair| C
+```
+
+> Start date is hardcoded to `2026-01-01 UTC`. Errors on individual pairs are logged and skipped so a single failure does not abort the rest of the run.
+
+---
+
 ## API Reference
 
 ### Trading Accounts
@@ -87,6 +254,7 @@ ASP.NET Core backend API for algorithmic trading — collects K-line data from B
 | `GET` | `/api/tradebots` | List trade bots (optional `?tradingAccountId=` filter) |
 | `GET` | `/api/tradebots/{id}` | Get a trade bot by ID |
 | `PATCH` | `/api/tradebots/{id}` | Update a trade bot |
+| `DELETE` | `/api/tradebots/{id}` | Delete a trade bot |
 | `POST` | `/api/tradebots/{id}/enable` | Enable a trade bot |
 | `POST` | `/api/tradebots/{id}/disable` | Disable a trade bot |
 
@@ -105,7 +273,7 @@ ASP.NET Core backend API for algorithmic trading — collects K-line data from B
 
 | Endpoint | Description |
 |---|---|
-| `WS /ws/backtests/{id}/stream` | Stream live candles while a backtest runs |
+| `WS /ws/charts/backtest?backtestId={id}` | Stream live candles while a backtest runs |
 
 The stream emits JSON frames with a `type` discriminator:
 

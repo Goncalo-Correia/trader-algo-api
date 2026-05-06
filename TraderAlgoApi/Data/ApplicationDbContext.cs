@@ -150,9 +150,10 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         // TradingStrategy — IDs match the C# enum values
         // -------------------------------------------------------------------
         modelBuilder.Entity<TradingStrategy>().HasData(
-            new TradingStrategy { Id = 1, Name = "SMA"  },
-            new TradingStrategy { Id = 2, Name = "RSI"  },
-            new TradingStrategy { Id = 3, Name = "MACD" });
+            new TradingStrategy { Id = 1, Name = "SMA"      },
+            new TradingStrategy { Id = 2, Name = "RSI"      },
+            new TradingStrategy { Id = 3, Name = "MACD"     },
+            new TradingStrategy { Id = 4, Name = "SMA MACD" });
 
         // -------------------------------------------------------------------
         // TradingAccounts
