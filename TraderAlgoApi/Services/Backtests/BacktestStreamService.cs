@@ -51,7 +51,7 @@ public sealed class BacktestStreamService(
         var backtest = await dbContext.Backtests
             .Include(b => b.Symbol)
             .Include(b => b.Interval)
-            .Include(b => b.TradingStrategy)
+            .Include(b => b.TradeBot)
             .FirstOrDefaultAsync(b => b.Id == backtestId, cancellationToken);
 
         if (backtest is null)
@@ -133,7 +133,8 @@ public sealed class BacktestStreamService(
         Backtest backtest,
         CancellationToken cancellationToken)
     {
-        var rule = SelectRule(backtest.TradingStrategyId);
+        var bot = backtest.TradeBot!;
+        var rule = SelectRule(bot.TradingStrategyId);
 
         var rangeCandles = await dbContext.KlineData
             .AsNoTracking()
@@ -147,11 +148,11 @@ public sealed class BacktestStreamService(
             .OrderBy(k => k.OpenTime)
             .ToListAsync(cancellationToken);
 
-        if (backtest.IsNySessionOnly)
+        if (bot.IsNySessionOnly)
             rangeCandles = rangeCandles.Where(IsNySessionCandle).ToList();
 
         // When NY-session-only, fetch enough prior candles to find 2 that fall within session hours.
-        var priorLookback = backtest.IsNySessionOnly ? 20 : 2;
+        var priorLookback = bot.IsNySessionOnly ? 20 : 2;
         var priorCandlesRaw = await dbContext.KlineData
             .AsNoTracking()
             .Where(k => k.SymbolId == backtest.SymbolId &&
@@ -165,7 +166,7 @@ public sealed class BacktestStreamService(
             .OrderBy(k => k.OpenTime)
             .ToListAsync(cancellationToken);
 
-        var priorCandles = backtest.IsNySessionOnly
+        var priorCandles = bot.IsNySessionOnly
             ? priorCandlesRaw.Where(IsNySessionCandle).TakeLast(2).ToList()
             : priorCandlesRaw;
 
@@ -196,7 +197,7 @@ public sealed class BacktestStreamService(
 
         // Restore candle-age of a resumed open trade so MaxCandlesPerTrade still fires correctly.
         var openTradeCandles = 0;
-        if (openTrade is not null && backtest.MaxCandlesPerTrade.HasValue && openTrade.OpenedAt.HasValue)
+        if (openTrade is not null && bot.MaxCandlesPerTrade.HasValue && openTrade.OpenedAt.HasValue)
         {
             openTradeCandles = rangeCandles.Count(
                 k => k.OpenTime >= openTrade.OpenedAt.Value &&
@@ -242,8 +243,8 @@ public sealed class BacktestStreamService(
 
             // Close by candle age when SL/TP didn't fire first.
             if (openTrade is not null &&
-                backtest.MaxCandlesPerTrade.HasValue &&
-                openTradeCandles >= backtest.MaxCandlesPerTrade.Value)
+                bot.MaxCandlesPerTrade.HasValue &&
+                openTradeCandles >= bot.MaxCandlesPerTrade.Value)
             {
                 CloseTrade(openTrade, current.Close, TradeCloseReason.Manual, current.OpenTime, ref balance);
                 await dbContext.SaveChangesAsync(cancellationToken);
@@ -261,9 +262,9 @@ public sealed class BacktestStreamService(
             }
 
             // Check breakeven trigger on the surviving open trade.
-            if (openTrade is not null && backtest.Breakeven.HasValue && openTrade.StopLoss != 0)
+            if (openTrade is not null && bot.Breakeven.HasValue && openTrade.StopLoss != 0)
             {
-                var breakevenTriggered = CheckBreakeven(openTrade, current, backtest.Breakeven.Value);
+                var breakevenTriggered = CheckBreakeven(openTrade, current, bot.Breakeven.Value);
                 if (breakevenTriggered)
                 {
                     openTrade.StopLoss = 0;
@@ -287,7 +288,7 @@ public sealed class BacktestStreamService(
             }
 
             // Evaluate entry signal when flat.
-            if (openTrade is null && CanEnterToday(backtest, current.OpenTime, dailyStats))
+            if (openTrade is null && CanEnterToday(bot, current.OpenTime, dailyStats))
             {
                 TradeSide? side = null;
 
@@ -312,10 +313,10 @@ public sealed class BacktestStreamService(
                         IntervalId       = backtest.IntervalId,
                         SideId           = (int)side.Value,
                         OrderTypeId      = (int)TradeOrderType.Market,
-                        Quantity         = backtest.Quantity,
+                        Quantity         = bot.Quantity,
                         EntryPrice       = current.Close,
-                        StopLoss         = backtest.StopLoss,
-                        TakeProfit       = backtest.TakeProfit,
+                        StopLoss         = bot.StopLoss,
+                        TakeProfit       = bot.TakeProfit,
                         StatusId         = (int)TradeStatus.Active,
                         CreatedAt        = current.OpenTime,
                         OpenedAt         = current.OpenTime,
@@ -377,13 +378,13 @@ public sealed class BacktestStreamService(
     }
 
     private static bool CanEnterToday(
-        Backtest backtest,
+        TradeBot bot,
         DateTimeOffset candleTime,
         Dictionary<DateOnly, (decimal Pnl, int Losses)> dailyStats)
     {
         var easternTime = TimeZoneInfo.ConvertTime(candleTime, EasternZone);
 
-        if (backtest.IsNySessionOnly)
+        if (bot.IsNySessionOnly)
         {
             var dow = easternTime.DayOfWeek;
             if (dow == DayOfWeek.Saturday || dow == DayOfWeek.Sunday)
@@ -394,15 +395,15 @@ public sealed class BacktestStreamService(
                 return false;
         }
 
-        if (backtest.DailyProfitGoal.HasValue || backtest.MaxLossesPerDay.HasValue)
+        if (bot.DailyProfitGoal.HasValue || bot.MaxLossesPerDay.HasValue)
         {
             var day = DateOnly.FromDateTime(easternTime.DateTime);
             dailyStats.TryGetValue(day, out var stats);
 
-            if (backtest.DailyProfitGoal.HasValue && stats.Pnl >= backtest.DailyProfitGoal.Value)
+            if (bot.DailyProfitGoal.HasValue && stats.Pnl >= bot.DailyProfitGoal.Value)
                 return false;
 
-            if (backtest.MaxLossesPerDay.HasValue && stats.Losses >= backtest.MaxLossesPerDay.Value)
+            if (bot.MaxLossesPerDay.HasValue && stats.Losses >= bot.MaxLossesPerDay.Value)
                 return false;
         }
 

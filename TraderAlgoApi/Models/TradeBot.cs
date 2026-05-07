@@ -45,6 +45,18 @@ public sealed class TradeBot
     [Precision(28, 10)]
     public decimal? TakeProfit { get; set; }
 
+    [Precision(28, 10)]
+    public decimal? Breakeven { get; set; }
+
+    public bool IsNySessionOnly { get; set; }
+
+    [Precision(28, 10)]
+    public decimal? DailyProfitGoal { get; set; }
+
+    public int? MaxLossesPerDay { get; set; }
+
+    public int? MaxCandlesPerTrade { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset UpdatedAt { get; set; }

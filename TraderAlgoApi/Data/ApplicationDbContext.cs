@@ -160,20 +160,14 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         // -------------------------------------------------------------------
         modelBuilder.Entity<TradingAccount>(entity =>
         {
-            entity.HasOne(a => a.TradingStrategy)
-                .WithMany()
-                .HasForeignKey(a => a.TradingStrategyId)
-                .OnDelete(DeleteBehavior.Restrict);
-
             entity.HasData(new TradingAccount
             {
-                Id                = 1,
-                Name              = "Default",
-                InitialBalance    = 1000m,
-                CurrentBalance    = 1000m,
-                TradingStrategyId = 1,
-                IsActive          = true,
-                CreatedAt         = new DateTimeOffset(2026, 4, 30, 0, 0, 0, TimeSpan.Zero)
+                Id             = 1,
+                Name           = "Default",
+                InitialBalance = 1000m,
+                CurrentBalance = 1000m,
+                IsActive       = true,
+                CreatedAt      = new DateTimeOffset(2026, 4, 30, 0, 0, 0, TimeSpan.Zero)
             });
         });
 
@@ -246,11 +240,6 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.HasOne(b => b.Interval)
                 .WithMany()
                 .HasForeignKey(b => b.IntervalId)
-                .OnDelete(DeleteBehavior.Restrict);
-
-            entity.HasOne(b => b.TradingStrategy)
-                .WithMany()
-                .HasForeignKey(b => b.TradingStrategyId)
                 .OnDelete(DeleteBehavior.Restrict);
 
             entity.HasOne(b => b.TradeBot)

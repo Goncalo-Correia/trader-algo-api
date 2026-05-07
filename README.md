@@ -287,16 +287,22 @@ The stream emits JSON frames with a `type` discriminator:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `symbol` | string | Yes | Trading pair (e.g. `BTCUSDT`) |
-| `interval` | string | Yes | Interval code (e.g. `1h`) |
+| `symbolCode` | string | Yes | Trading pair (e.g. `BTCUSDT`) |
+| `intervalCode` | string | Yes | Interval code (e.g. `1h`) |
 | `from` | ISO 8601 | Yes | Start of the backtest window |
 | `to` | ISO 8601 | Yes | End of the backtest window |
 | `initialBalance` | decimal | Yes | Starting account balance |
-| `tradingStrategy` | string | No | Strategy name (defaults to account strategy) |
-| `quantity` | decimal | No | Trade size per position |
+| `tradingStrategyId` | int | No* | Strategy ID — `1` SMA · `2` RSI · `3` MACD · `4` SMA MACD |
+| `quantity` | decimal | No* | Trade size per position |
 | `stopLoss` | decimal | No | Fixed stop-loss distance from entry |
 | `takeProfit` | decimal | No | Fixed take-profit distance from entry |
-| `breakeven` | decimal | No | Minimum unrealised PnL that triggers a move of stop-loss to breakeven |
+| `breakeven` | decimal | No | Minimum unrealised PnL that triggers a move of stop-loss to entry price |
+| `isNySessionOnly` | bool | No | Restrict entries to New York session hours |
+| `dailyProfitGoal` | decimal | No | Stop opening new trades once daily PnL reaches this target |
+| `maxLossesPerDay` | int | No | Maximum losing trades per day before trading halts |
+| `maxCandlesPerTrade` | int | No | Force-close a trade after this many candles |
+
+*`tradingStrategyId` and `quantity` must either both be supplied, or both omitted — if omitted, the most recently updated enabled live trade bot is used as a template and its settings are inherited.
 
 **Backtest status values:** `Pending` → `Running` → `Completed` / `Cancelled` / `Failed`
 
@@ -458,10 +464,15 @@ A trade bot polls for strategy signals on a fixed candle interval and opens/clos
 |---|---|
 | `tradingAccountId` | Account the bot trades on (mutually exclusive with `backtestId`) |
 | `backtestId` | Backtest the bot is scoped to (mutually exclusive with `tradingAccountId`) |
-| `tradingStrategy` | One of `SMA`, `RSI`, `MACD` |
+| `tradingStrategyId` | Strategy — `1` SMA · `2` RSI · `3` MACD · `4` SMA MACD |
 | `symbol` / `interval` | The market and timeframe to watch |
 | `quantity` | Fixed position size per trade |
 | `stopLoss` / `takeProfit` | Optional bracket distances from entry |
+| `breakeven` | Minimum unrealised PnL that triggers a move of stop-loss to entry price |
+| `isNySessionOnly` | Restrict signal evaluation to New York session hours |
+| `dailyProfitGoal` | Stop opening new trades once cumulative daily PnL reaches this target |
+| `maxLossesPerDay` | Maximum losing trades allowed in a single day before trading halts |
+| `maxCandlesPerTrade` | Force-close a trade after this many candles if still open |
 | `isEnabled` | Toggle on/off without deleting the bot |
 | `lastSignalAt` | Timestamp of the most recent signal evaluation |
 
