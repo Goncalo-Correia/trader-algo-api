@@ -18,9 +18,13 @@ public sealed class TradeBotService(
         CancellationToken cancellationToken = default)
     {
         var account = await dbContext.TradingAccounts
-            .Include(a => a.TradingStrategy)
             .FirstOrDefaultAsync(a => a.Id == request.TradingAccountId, cancellationToken)
             ?? throw new ArgumentException($"Trading account {request.TradingAccountId} not found.");
+
+        var strategyExists = await dbContext.TradingStrategies
+            .AnyAsync(s => s.Id == request.TradingStrategyId, cancellationToken);
+        if (!strategyExists)
+            throw new ArgumentException($"Trading strategy {request.TradingStrategyId} not found.");
 
         if (request.IsEnabled)
         {
@@ -43,16 +47,21 @@ public sealed class TradeBotService(
         var now = timeProvider.GetUtcNow();
         var tradeBot = new TradeBot
         {
-            TradingAccountId = account.Id,
-            TradingStrategyId = account.TradingStrategyId,
-            SymbolId         = symbol.Id,
-            IntervalId       = interval.Id,
-            IsEnabled        = request.IsEnabled,
-            Quantity         = request.Quantity,
-            StopLoss         = request.StopLoss,
-            TakeProfit       = request.TakeProfit,
-            CreatedAt        = now,
-            UpdatedAt        = now
+            TradingAccountId   = account.Id,
+            TradingStrategyId  = request.TradingStrategyId,
+            SymbolId           = symbol.Id,
+            IntervalId         = interval.Id,
+            IsEnabled          = request.IsEnabled,
+            Quantity           = request.Quantity,
+            StopLoss           = request.StopLoss,
+            TakeProfit         = request.TakeProfit,
+            Breakeven          = request.Breakeven,
+            IsNySessionOnly    = request.IsNySessionOnly,
+            DailyProfitGoal    = request.DailyProfitGoal,
+            MaxLossesPerDay    = request.MaxLossesPerDay,
+            MaxCandlesPerTrade = request.MaxCandlesPerTrade,
+            CreatedAt          = now,
+            UpdatedAt          = now
         };
 
         dbContext.TradeBots.Add(tradeBot);
@@ -111,13 +120,18 @@ public sealed class TradeBotService(
             await EnsureCanEnableAsync(tradeBot, cancellationToken);
         }
 
-        tradeBot.SymbolId = symbol.Id;
-        tradeBot.IntervalId = interval.Id;
-        tradeBot.IsEnabled = request.IsEnabled;
-        tradeBot.Quantity = request.Quantity;
-        tradeBot.StopLoss = request.StopLoss;
-        tradeBot.TakeProfit = request.TakeProfit;
-        tradeBot.UpdatedAt = timeProvider.GetUtcNow();
+        tradeBot.SymbolId          = symbol.Id;
+        tradeBot.IntervalId        = interval.Id;
+        tradeBot.IsEnabled         = request.IsEnabled;
+        tradeBot.Quantity          = request.Quantity;
+        tradeBot.StopLoss          = request.StopLoss;
+        tradeBot.TakeProfit        = request.TakeProfit;
+        tradeBot.Breakeven         = request.Breakeven;
+        tradeBot.IsNySessionOnly   = request.IsNySessionOnly;
+        tradeBot.DailyProfitGoal   = request.DailyProfitGoal;
+        tradeBot.MaxLossesPerDay   = request.MaxLossesPerDay;
+        tradeBot.MaxCandlesPerTrade = request.MaxCandlesPerTrade;
+        tradeBot.UpdatedAt         = timeProvider.GetUtcNow();
 
         await dbContext.SaveChangesAsync(cancellationToken);
 
@@ -235,6 +249,11 @@ public sealed class TradeBotService(
             Quantity:           b.Quantity,
             StopLoss:           b.StopLoss,
             TakeProfit:         b.TakeProfit,
+            Breakeven:          b.Breakeven,
+            IsNySessionOnly:    b.IsNySessionOnly,
+            DailyProfitGoal:    b.DailyProfitGoal,
+            MaxLossesPerDay:    b.MaxLossesPerDay,
+            MaxCandlesPerTrade: b.MaxCandlesPerTrade,
             CreatedAt:          b.CreatedAt.ToUnixTimeMilliseconds(),
             UpdatedAt:          b.UpdatedAt.ToUnixTimeMilliseconds(),
             LastSignalAt:       b.LastSignalAt?.ToUnixTimeMilliseconds());

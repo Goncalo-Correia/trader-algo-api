@@ -2,7 +2,6 @@ using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
 using TraderAlgoApi.Dtos.TradingAccounts;
 using TraderAlgoApi.Models;
-using TraderAlgoApi.Models.Enums;
 
 namespace TraderAlgoApi.Services.TradingAccounts;
 
@@ -14,26 +13,17 @@ public sealed class TradingAccountService(
         CreateTradingAccountRequestDto request,
         CancellationToken cancellationToken = default)
     {
-        var strategyExists = await dbContext.TradingStrategies
-            .AnyAsync(s => s.Id == (int)request.TradingStrategy, cancellationToken);
-
-        if (!strategyExists)
-            throw new ArgumentException($"Trading strategy '{request.TradingStrategy}' not found.");
-
         var account = new TradingAccount
         {
-            Name              = request.Name,
-            InitialBalance    = request.InitialBalance,
-            CurrentBalance    = request.InitialBalance,
-            TradingStrategyId = (int)request.TradingStrategy,
-            IsActive          = true,
-            CreatedAt         = timeProvider.GetUtcNow()
+            Name           = request.Name,
+            InitialBalance = request.InitialBalance,
+            CurrentBalance = request.InitialBalance,
+            IsActive       = true,
+            CreatedAt      = timeProvider.GetUtcNow()
         };
 
         dbContext.TradingAccounts.Add(account);
         await dbContext.SaveChangesAsync(cancellationToken);
-
-        await dbContext.Entry(account).Reference(a => a.TradingStrategy).LoadAsync(cancellationToken);
 
         return ToDto(account);
     }
@@ -43,7 +33,6 @@ public sealed class TradingAccountService(
     {
         var accounts = await dbContext.TradingAccounts
             .AsNoTracking()
-            .Include(a => a.TradingStrategy)
             .OrderByDescending(a => a.CreatedAt)
             .ToListAsync(cancellationToken);
 
@@ -55,7 +44,6 @@ public sealed class TradingAccountService(
         CancellationToken cancellationToken = default)
     {
         var account = await dbContext.TradingAccounts
-            .Include(a => a.TradingStrategy)
             .FirstOrDefaultAsync(a => a.Id == id, cancellationToken)
             ?? throw new KeyNotFoundException($"Trading account {id} not found.");
 
@@ -68,7 +56,6 @@ public sealed class TradingAccountService(
         CancellationToken cancellationToken = default)
     {
         var account = await dbContext.TradingAccounts
-            .Include(a => a.TradingStrategy)
             .FirstOrDefaultAsync(a => a.Id == id, cancellationToken)
             ?? throw new KeyNotFoundException($"Trading account {id} not found.");
 
@@ -101,11 +88,10 @@ public sealed class TradingAccountService(
 
     private static TradingAccountResponseDto ToDto(TradingAccount a) =>
         new(
-            Id:              a.Id,
-            Name:            a.Name,
-            InitialBalance:  a.InitialBalance,
-            CurrentBalance:  a.CurrentBalance,
-            TradingStrategy: (TradingStrategy)a.TradingStrategyId,
-            IsActive:        a.IsActive,
-            CreatedAt:       a.CreatedAt.ToUnixTimeMilliseconds());
+            Id:             a.Id,
+            Name:           a.Name,
+            InitialBalance: a.InitialBalance,
+            CurrentBalance: a.CurrentBalance,
+            IsActive:       a.IsActive,
+            CreatedAt:      a.CreatedAt.ToUnixTimeMilliseconds());
 }

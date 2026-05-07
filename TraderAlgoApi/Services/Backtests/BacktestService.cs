@@ -44,18 +44,9 @@ public sealed class BacktestService(
         var now = timeProvider.GetUtcNow();
         var backtest = new Backtest
         {
-            SymbolId          = symbol.Id,
-            IntervalId        = interval.Id,
-            TradingStrategyId = tradingStrategyId,
-            Quantity          = quantity,
-            StopLoss          = stopLoss,
-            TakeProfit        = takeProfit,
-            Breakeven         = request.Breakeven,
-            IsNySessionOnly   = request.IsNySessionOnly,
-            DailyProfitGoal   = request.DailyProfitGoal,
-            MaxLossesPerDay   = request.MaxLossesPerDay,
-            MaxCandlesPerTrade = request.MaxCandlesPerTrade,
-            From              = request.From,
+            SymbolId   = symbol.Id,
+            IntervalId = interval.Id,
+            From       = request.From,
             To                = request.To,
             StartedAt         = now,
             Status            = BacktestStatus.Pending,
@@ -68,25 +59,32 @@ public sealed class BacktestService(
 
         var tradeBot = new TradeBot
         {
-            BacktestId        = backtest.Id,
-            TradingStrategyId = tradingStrategyId,
-            SymbolId          = symbol.Id,
-            IntervalId        = interval.Id,
-            IsEnabled         = true,
-            Quantity          = quantity,
-            StopLoss          = stopLoss,
-            TakeProfit        = takeProfit,
-            CreatedAt         = now,
-            UpdatedAt         = now
+            BacktestId         = backtest.Id,
+            TradingStrategyId  = tradingStrategyId,
+            SymbolId           = symbol.Id,
+            IntervalId         = interval.Id,
+            IsEnabled          = true,
+            Quantity           = quantity,
+            StopLoss           = stopLoss,
+            TakeProfit         = takeProfit,
+            Breakeven          = request.Breakeven,
+            IsNySessionOnly    = request.IsNySessionOnly,
+            DailyProfitGoal    = request.DailyProfitGoal,
+            MaxLossesPerDay    = request.MaxLossesPerDay,
+            MaxCandlesPerTrade = request.MaxCandlesPerTrade,
+            CreatedAt          = now,
+            UpdatedAt          = now
         };
 
         dbContext.TradeBots.Add(tradeBot);
         await dbContext.SaveChangesAsync(cancellationToken);
 
         backtest.TradeBotId = tradeBot.Id;
+        backtest.TradeBot = tradeBot;
+        tradeBot.TradingStrategy = strategy;
         await dbContext.SaveChangesAsync(cancellationToken);
 
-        return ToSummaryDto(backtest, symbol, interval, strategy, 0);
+        return ToSummaryDto(backtest, symbol, interval, 0);
     }
 
     public async Task<IReadOnlyList<BacktestSummaryResponseDto>> GetAllAsync(
@@ -96,13 +94,14 @@ public sealed class BacktestService(
             .AsNoTracking()
             .Include(b => b.Symbol)
             .Include(b => b.Interval)
-            .Include(b => b.TradingStrategy)
+            .Include(b => b.TradeBot)
+                .ThenInclude(tb => tb!.TradingStrategy)
             .Include(b => b.Trades)
             .OrderByDescending(b => b.StartedAt)
             .ToListAsync(cancellationToken);
 
         return backtests
-            .Select(b => ToSummaryDto(b, b.Symbol, b.Interval, b.TradingStrategy, b.Trades.Count))
+            .Select(b => ToSummaryDto(b, b.Symbol, b.Interval, b.Trades.Count))
             .ToList();
     }
 
@@ -114,7 +113,8 @@ public sealed class BacktestService(
             .AsNoTracking()
             .Include(b => b.Symbol)
             .Include(b => b.Interval)
-            .Include(b => b.TradingStrategy)
+            .Include(b => b.TradeBot)
+                .ThenInclude(tb => tb!.TradingStrategy)
             .Include(b => b.Trades)
                 .ThenInclude(t => t.Symbol)
             .Include(b => b.Trades)
@@ -159,7 +159,7 @@ public sealed class BacktestService(
             TradeBotId:     backtest.TradeBotId,
             SymbolCode:     backtest.Symbol.Code,
             IntervalCode:   backtest.Interval.Code,
-            StrategyName:   backtest.TradingStrategy.Name,
+            StrategyName:   backtest.TradeBot?.TradingStrategy?.Name ?? string.Empty,
             From:           backtest.From.ToUnixTimeSeconds(),
             To:             backtest.To.ToUnixTimeSeconds(),
             StartedAt:      backtest.StartedAt.ToUnixTimeMilliseconds(),
@@ -168,14 +168,14 @@ public sealed class BacktestService(
             InitialBalance: backtest.InitialBalance,
             FinalBalance:   backtest.FinalBalance,
             Pnl:            backtest.Pnl,
-            Quantity:       backtest.Quantity,
-            StopLoss:       backtest.StopLoss,
-            TakeProfit:     backtest.TakeProfit,
-            Breakeven:      backtest.Breakeven,
-            IsNySessionOnly: backtest.IsNySessionOnly,
-            DailyProfitGoal: backtest.DailyProfitGoal,
-            MaxLossesPerDay: backtest.MaxLossesPerDay,
-            MaxCandlesPerTrade: backtest.MaxCandlesPerTrade,
+            Quantity:       backtest.TradeBot?.Quantity ?? 0,
+            StopLoss:       backtest.TradeBot?.StopLoss,
+            TakeProfit:     backtest.TradeBot?.TakeProfit,
+            Breakeven:      backtest.TradeBot?.Breakeven,
+            IsNySessionOnly: backtest.TradeBot?.IsNySessionOnly ?? false,
+            DailyProfitGoal: backtest.TradeBot?.DailyProfitGoal,
+            MaxLossesPerDay: backtest.TradeBot?.MaxLossesPerDay,
+            MaxCandlesPerTrade: backtest.TradeBot?.MaxCandlesPerTrade,
             CandleCount:    backtest.CandleCount,
             Trades:         tradeDtos,
             Candles:        candles,
@@ -259,14 +259,13 @@ public sealed class BacktestService(
         Backtest b,
         Symbol symbol,
         Interval interval,
-        Models.Lookups.TradingStrategy strategy,
         int tradeCount) =>
         new(
             Id:             b.Id,
             TradeBotId:     b.TradeBotId,
             SymbolCode:     symbol.Code,
             IntervalCode:   interval.Code,
-            StrategyName:   strategy.Name,
+            StrategyName:   b.TradeBot?.TradingStrategy?.Name ?? string.Empty,
             From:           b.From.ToUnixTimeSeconds(),
             To:             b.To.ToUnixTimeSeconds(),
             StartedAt:      b.StartedAt.ToUnixTimeMilliseconds(),
@@ -275,14 +274,14 @@ public sealed class BacktestService(
             InitialBalance: b.InitialBalance,
             FinalBalance:   b.FinalBalance,
             Pnl:            b.Pnl,
-            Quantity:       b.Quantity,
-            StopLoss:       b.StopLoss,
-            TakeProfit:     b.TakeProfit,
-            Breakeven:      b.Breakeven,
-            IsNySessionOnly: b.IsNySessionOnly,
-            DailyProfitGoal: b.DailyProfitGoal,
-            MaxLossesPerDay: b.MaxLossesPerDay,
-            MaxCandlesPerTrade: b.MaxCandlesPerTrade,
+            Quantity:       b.TradeBot?.Quantity ?? 0,
+            StopLoss:       b.TradeBot?.StopLoss,
+            TakeProfit:     b.TradeBot?.TakeProfit,
+            Breakeven:      b.TradeBot?.Breakeven,
+            IsNySessionOnly: b.TradeBot?.IsNySessionOnly ?? false,
+            DailyProfitGoal: b.TradeBot?.DailyProfitGoal,
+            MaxLossesPerDay: b.TradeBot?.MaxLossesPerDay,
+            MaxCandlesPerTrade: b.TradeBot?.MaxCandlesPerTrade,
             CandleCount:    b.CandleCount,
             TradeCount:     tradeCount);
 

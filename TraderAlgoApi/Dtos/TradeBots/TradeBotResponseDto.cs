@@ -15,6 +15,11 @@ public sealed record TradeBotResponseDto(
     [property: JsonPropertyName("quantity")] decimal Quantity,
     [property: JsonPropertyName("stopLoss")] decimal? StopLoss,
     [property: JsonPropertyName("takeProfit")] decimal? TakeProfit,
+    [property: JsonPropertyName("breakeven")] decimal? Breakeven,
+    [property: JsonPropertyName("isNySessionOnly")] bool IsNySessionOnly,
+    [property: JsonPropertyName("dailyProfitGoal")] decimal? DailyProfitGoal,
+    [property: JsonPropertyName("maxLossesPerDay")] int? MaxLossesPerDay,
+    [property: JsonPropertyName("maxCandlesPerTrade")] int? MaxCandlesPerTrade,
     [property: JsonPropertyName("createdAt")] long CreatedAt,
     [property: JsonPropertyName("updatedAt")] long UpdatedAt,
     [property: JsonPropertyName("lastSignalAt")] long? LastSignalAt);

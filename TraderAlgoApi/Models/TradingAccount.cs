@@ -1,7 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using Microsoft.EntityFrameworkCore;
-using TraderAlgoApi.Models.Lookups;
 
 namespace TraderAlgoApi.Models;
 
@@ -20,11 +19,6 @@ public sealed class TradingAccount
 
     [Precision(28, 10)]
     public decimal CurrentBalance { get; set; }
-
-    public int TradingStrategyId { get; set; }
-
-    [ForeignKey(nameof(TradingStrategyId))]
-    public TradingStrategy TradingStrategy { get; set; } = null!;
 
     public bool IsActive { get; set; }
 
