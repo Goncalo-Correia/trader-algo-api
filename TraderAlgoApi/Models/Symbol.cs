@@ -1,6 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
-using TraderAlgoApi.Models.Enums;
+using TraderAlgoApi.Models.Lookups;
 
 namespace TraderAlgoApi.Models;
 
@@ -31,7 +31,10 @@ public sealed class Symbol
 
     public bool IsDefault { get; set; } = false;
 
-    public SymbolProvider Provider { get; set; } = SymbolProvider.Binance;
+    public int ProviderId { get; set; }
+
+    [ForeignKey(nameof(ProviderId))]
+    public SymbolProvider Provider { get; set; } = null!;
 
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 

@@ -173,7 +173,7 @@ public sealed class BinanceKlineStreamingService(
     {
         var symbols = await dbContext.Symbols
             .AsNoTracking()
-            .Where(s => s.IsActive && s.Provider == SymbolProvider.Binance)
+            .Where(s => s.IsActive && s.ProviderId == (int)SymbolProvider.Binance)
             .Select(s => s.Code)
             .ToListAsync(cancellationToken);
 

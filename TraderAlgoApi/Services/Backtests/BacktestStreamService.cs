@@ -61,11 +61,11 @@ public sealed class BacktestStreamService(
             return;
         }
 
-        if (backtest.Status is not (BacktestStatus.Pending or BacktestStatus.Running))
+        if ((BacktestStatus)backtest.StatusId is not (BacktestStatus.Pending or BacktestStatus.Running))
         {
             context.Response.StatusCode = StatusCodes.Status400BadRequest;
             await context.Response.WriteAsync(
-                $"Backtest {backtestId} cannot be started: status is {backtest.Status}.",
+                $"Backtest {backtestId} cannot be started: status is {(BacktestStatus)backtest.StatusId}.",
                 cancellationToken);
             return;
         }
@@ -78,14 +78,14 @@ public sealed class BacktestStreamService(
         var monitorTask = MonitorClientAsync(clientSocket, disconnectCts, linked.Token);
 
         // Transition Pending → Running.
-        backtest.Status = BacktestStatus.Running;
+        backtest.StatusId = (int)BacktestStatus.Running;
         await dbContext.SaveChangesAsync(cancellationToken);
 
         try
         {
             await RunSimulationAsync(clientSocket, backtest, linked.Token);
 
-            backtest.Status = BacktestStatus.Completed;
+            backtest.StatusId = (int)BacktestStatus.Completed;
             backtest.CompletedAt = timeProvider.GetUtcNow();
             await dbContext.SaveChangesAsync(CancellationToken.None);
 
@@ -100,20 +100,20 @@ public sealed class BacktestStreamService(
         catch (OperationCanceledException) when (disconnectCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             logger.LogInformation("Backtest {Id} cancelled: client disconnected", backtest.Id);
-            backtest.Status = BacktestStatus.Cancelled;
+            backtest.StatusId = (int)BacktestStatus.Cancelled;
             backtest.CompletedAt = timeProvider.GetUtcNow();
             await dbContext.SaveChangesAsync(CancellationToken.None);
         }
         catch (OperationCanceledException)
         {
-            backtest.Status = BacktestStatus.Cancelled;
+            backtest.StatusId = (int)BacktestStatus.Cancelled;
             backtest.CompletedAt = timeProvider.GetUtcNow();
             await dbContext.SaveChangesAsync(CancellationToken.None);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Backtest {Id} stream failed", backtest.Id);
-            backtest.Status = BacktestStatus.Failed;
+            backtest.StatusId = (int)BacktestStatus.Failed;
             backtest.CompletedAt = timeProvider.GetUtcNow();
             await dbContext.SaveChangesAsync(CancellationToken.None);
         }

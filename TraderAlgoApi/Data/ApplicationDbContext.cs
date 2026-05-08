@@ -27,6 +27,9 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<TradingStrategy>  TradingStrategies  => Set<TradingStrategy>();
     public DbSet<TradingAccount>   TradingAccounts    => Set<TradingAccount>();
 
+    public DbSet<BacktestStatus> BacktestStatuses => Set<BacktestStatus>();
+    public DbSet<SymbolProvider> SymbolProviders  => Set<SymbolProvider>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -38,6 +41,11 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         {
             entity.HasIndex(s => s.Code).IsUnique();
 
+            entity.HasOne(s => s.Provider)
+                .WithMany()
+                .HasForeignKey(s => s.ProviderId)
+                .OnDelete(DeleteBehavior.Restrict);
+
             entity.HasData(
                 new Symbol
                 {
@@ -48,7 +56,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
                     DisplayName = "BTC/USDT",
                     IsActive    = true,
                     IsDefault   = true,
-                    Provider    = Models.Enums.SymbolProvider.Binance,
+                    ProviderId  = (int)Models.Enums.SymbolProvider.Binance,
                     CreatedAt   = new DateTimeOffset(2026, 4, 16, 0, 0, 0, TimeSpan.Zero)
                 },
                 new Symbol
@@ -60,7 +68,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
                     DisplayName = "SPY",
                     IsActive    = true,
                     IsDefault   = false,
-                    Provider    = Models.Enums.SymbolProvider.Alpaca,
+                    ProviderId  = (int)Models.Enums.SymbolProvider.Alpaca,
                     CreatedAt   = new DateTimeOffset(2026, 5, 1, 0, 0, 0, TimeSpan.Zero)
                 });
         });
@@ -170,6 +178,23 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             new TradingStrategy { Id = 4, Name = "SMA MACD" });
 
         // -------------------------------------------------------------------
+        // SymbolProvider — IDs match the C# enum values
+        // -------------------------------------------------------------------
+        modelBuilder.Entity<SymbolProvider>().HasData(
+            new SymbolProvider { Id = 1, Name = "Binance" },
+            new SymbolProvider { Id = 2, Name = "Alpaca"  });
+
+        // -------------------------------------------------------------------
+        // BacktestStatus — IDs match the C# enum values
+        // -------------------------------------------------------------------
+        modelBuilder.Entity<BacktestStatus>().HasData(
+            new BacktestStatus { Id = 1, Name = "Pending"   },
+            new BacktestStatus { Id = 2, Name = "Running"   },
+            new BacktestStatus { Id = 3, Name = "Completed" },
+            new BacktestStatus { Id = 4, Name = "Failed"    },
+            new BacktestStatus { Id = 5, Name = "Cancelled" });
+
+        // -------------------------------------------------------------------
         // TradingAccounts
         // -------------------------------------------------------------------
         modelBuilder.Entity<TradingAccount>(entity =>
@@ -260,6 +285,11 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
                 .WithMany()
                 .HasForeignKey(b => b.TradeBotId)
                 .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(b => b.Status)
+                .WithMany()
+                .HasForeignKey(b => b.StatusId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         // -------------------------------------------------------------------

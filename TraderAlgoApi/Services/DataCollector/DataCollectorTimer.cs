@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
+using TraderAlgoApi.Models.Enums;
 
 namespace TraderAlgoApi.Services.DataCollector;
 
@@ -29,8 +30,9 @@ public sealed class DataCollectorTimer(
         logger.LogInformation("Starting scheduled data collection");
 
         await using var scope = scopeFactory.CreateAsyncScope();
-        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        var dataCollectorService = scope.ServiceProvider.GetRequiredService<IDataCollectorService>();
+        var dbContext        = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var binanceService   = scope.ServiceProvider.GetRequiredService<IBinanceDataCollectorService>();
+        var alpacaService    = scope.ServiceProvider.GetRequiredService<IAlpacaDataCollectorService>();
 
         var symbols = await dbContext.Symbols
             .AsNoTracking()
@@ -46,13 +48,15 @@ public sealed class DataCollectorTimer(
 
         foreach (var symbol in symbols)
         {
+            IDataCollectorService service = (SymbolProvider)symbol.ProviderId == SymbolProvider.Binance
+                ? binanceService
+                : alpacaService;
+
             foreach (var interval in intervals)
             {
                 try
                 {
-                    // SyncGapsAsync only fetches bars that are missing — much cheaper than
-                    // CollectKlinesAsync which re-downloads from DataStartDate every night.
-                    var result = await dataCollectorService.SyncGapsAsync(
+                    var result = await service.SyncGapsAsync(
                         symbol.Code,
                         interval.Code,
                         DataStartDate,

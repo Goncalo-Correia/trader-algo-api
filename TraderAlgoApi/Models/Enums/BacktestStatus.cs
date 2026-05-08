@@ -2,9 +2,9 @@ namespace TraderAlgoApi.Models.Enums;
 
 public enum BacktestStatus
 {
-    Pending   = 0,
-    Running   = 1,
-    Completed = 2,
-    Failed    = 3,
-    Cancelled = 4
+    Pending   = 1,
+    Running   = 2,
+    Completed = 3,
+    Failed    = 4,
+    Cancelled = 5
 }

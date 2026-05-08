@@ -1,7 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using Microsoft.EntityFrameworkCore;
-using TraderAlgoApi.Models.Enums;
+using TraderAlgoApi.Models.Lookups;
 
 namespace TraderAlgoApi.Models;
 
@@ -37,7 +37,10 @@ public sealed class Backtest
 
     public DateTimeOffset? CompletedAt { get; set; }
 
-    public BacktestStatus Status { get; set; }
+    public int StatusId { get; set; }
+
+    [ForeignKey(nameof(StatusId))]
+    public BacktestStatus Status { get; set; } = null!;
 
     [Precision(28, 10)]
     public decimal InitialBalance { get; set; }

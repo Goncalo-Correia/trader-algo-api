@@ -39,7 +39,7 @@ public sealed class AlpacaKlineStreamingService(
             var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
             symbols = await db.Symbols
                 .AsNoTracking()
-                .Where(s => s.IsActive && s.Provider == SymbolProvider.Alpaca)
+                .Where(s => s.IsActive && s.ProviderId == (int)SymbolProvider.Alpaca)
                 .Select(s => s.Code)
                 .ToListAsync(stoppingToken);
         }
