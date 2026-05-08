@@ -6,6 +6,44 @@ public sealed class NyseSessionService
     private static readonly TimeOnly SessionOpen = new(9, 30);
     private static readonly TimeOnly SessionClose = new(16, 0);
 
+    public bool IsMarketOpen(DateTimeOffset utcNow)
+    {
+        var etNow = TimeZoneInfo.ConvertTime(utcNow, Eastern);
+        var date  = DateOnly.FromDateTime(etNow.DateTime);
+        var time  = TimeOnly.FromDateTime(etNow.DateTime);
+
+        return IsMarketDay(date) && time >= SessionOpen && time < SessionClose;
+    }
+
+    public bool IsMarketDay(DateOnly date) =>
+        date.DayOfWeek is not DayOfWeek.Saturday and not DayOfWeek.Sunday
+        && !NyseHolidayCalendar.IsHoliday(date);
+
+    /// <summary>
+    /// Returns the next session open time in UTC. Returns <paramref name="utcNow"/> if the
+    /// market is already open.
+    /// </summary>
+    public DateTimeOffset NextMarketOpen(DateTimeOffset utcNow)
+    {
+        if (IsMarketOpen(utcNow))
+            return utcNow;
+
+        var etNow = TimeZoneInfo.ConvertTime(utcNow, Eastern);
+        var date  = DateOnly.FromDateTime(etNow.DateTime);
+        var time  = TimeOnly.FromDateTime(etNow.DateTime);
+
+        // If today is a market day and we are before the open, open is today.
+        if (IsMarketDay(date) && time < SessionOpen)
+            return BuildSession(date).Start;
+
+        // Otherwise advance to the next market day.
+        var next = date.AddDays(1);
+        while (!IsMarketDay(next))
+            next = next.AddDays(1);
+
+        return BuildSession(next).Start;
+    }
+
     public (DateTimeOffset Start, DateTimeOffset End) CurrentSession(DateTimeOffset utcNow)
     {
         var etNow = TimeZoneInfo.ConvertTime(utcNow, Eastern);

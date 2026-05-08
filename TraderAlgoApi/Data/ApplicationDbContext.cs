@@ -38,17 +38,31 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         {
             entity.HasIndex(s => s.Code).IsUnique();
 
-            entity.HasData(new Symbol
-            {
-                Id          = 1,
-                Code        = "BTCUSDT",
-                BaseAsset   = "BTC",
-                QuoteAsset  = "USDT",
-                DisplayName = "BTC/USDT",
-                IsActive    = true,
-                IsDefault   = true,
-                CreatedAt   = new DateTimeOffset(2026, 4, 16, 0, 0, 0, TimeSpan.Zero)
-            });
+            entity.HasData(
+                new Symbol
+                {
+                    Id          = 1,
+                    Code        = "BTCUSDT",
+                    BaseAsset   = "BTC",
+                    QuoteAsset  = "USDT",
+                    DisplayName = "BTC/USDT",
+                    IsActive    = true,
+                    IsDefault   = true,
+                    Provider    = Models.Enums.SymbolProvider.Binance,
+                    CreatedAt   = new DateTimeOffset(2026, 4, 16, 0, 0, 0, TimeSpan.Zero)
+                },
+                new Symbol
+                {
+                    Id          = 2,
+                    Code        = "SPY",
+                    BaseAsset   = "SPY",
+                    QuoteAsset  = "USD",
+                    DisplayName = "SPY",
+                    IsActive    = true,
+                    IsDefault   = false,
+                    Provider    = Models.Enums.SymbolProvider.Alpaca,
+                    CreatedAt   = new DateTimeOffset(2026, 5, 1, 0, 0, 0, TimeSpan.Zero)
+                });
         });
 
         // -------------------------------------------------------------------

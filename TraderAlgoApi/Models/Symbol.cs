@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using TraderAlgoApi.Models.Enums;
 
 namespace TraderAlgoApi.Models;
 
@@ -29,6 +30,8 @@ public sealed class Symbol
     public bool IsActive { get; set; } = true;
 
     public bool IsDefault { get; set; } = false;
+
+    public SymbolProvider Provider { get; set; } = SymbolProvider.Binance;
 
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 

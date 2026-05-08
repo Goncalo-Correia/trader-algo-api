@@ -1,18 +1,16 @@
 using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
 using TraderAlgoApi.Models;
-using TraderAlgoApi.Services.Binance;
 using TraderAlgoApi.Services.Indicators;
+using TraderAlgoApi.Services.MarketData;
 
 namespace TraderAlgoApi.Services.DataCollector;
 
 public sealed class DataCollectorService(
     ApplicationDbContext dbContext,
-    IBinanceMarketDataService binanceMarketDataService,
+    IMarketDataProviderFactory providerFactory,
     IIndicatorSyncService indicatorSyncService) : IDataCollectorService
 {
-    private const int BinanceMaxKlineLimit = 1000;
-
     public async Task<DataCollectionResult> CollectKlinesAsync(
         string symbolCode,
         string intervalCode,
@@ -22,74 +20,70 @@ public sealed class DataCollectorService(
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolCode);
         ArgumentException.ThrowIfNullOrWhiteSpace(intervalCode);
 
-        var symbol = await dbContext.Symbols
-            .SingleAsync(s => s.Code == symbolCode, cancellationToken);
+        var symbol   = await dbContext.Symbols.SingleAsync(s => s.Code == symbolCode, cancellationToken);
+        var interval = await dbContext.Intervals.SingleAsync(i => i.Code == intervalCode, cancellationToken);
+        var provider = providerFactory.GetProvider(symbol.Provider);
 
-        var interval = await dbContext.Intervals
-            .SingleAsync(i => i.Code == intervalCode, cancellationToken);
-
-        var fetchedCount = 0;
+        var fetchedCount  = 0;
         var insertedCount = 0;
-        var updatedCount = 0;
-        var skippedCount = 0;
+        var updatedCount  = 0;
+        var skippedCount  = 0;
         var cursor = startTime;
         DateTimeOffset? latestCandleOpenTime = null;
 
         while (true)
         {
-            var klines = await binanceMarketDataService.GetKlinesAsync(
+            var candles = await provider.GetCandlesAsync(
                 symbol.Code,
                 interval.Code,
                 cursor,
                 endTime: null,
-                BinanceMaxKlineLimit,
+                provider.MaxPageSize,
                 cancellationToken);
 
-            var eligibleKlines = klines
-                .Where(kline => kline.OpenTime >= startTime)
-                .OrderBy(kline => kline.OpenTime)
+            var eligible = candles
+                .Where(c => c.OpenTime >= startTime)
+                .OrderBy(c => c.OpenTime)
                 .ToArray();
 
-            if (eligibleKlines.Length == 0)
-            {
+            if (eligible.Length == 0)
                 break;
-            }
 
-            fetchedCount += eligibleKlines.Length;
-            latestCandleOpenTime = eligibleKlines[^1].OpenTime;
+            fetchedCount += eligible.Length;
+            latestCandleOpenTime = eligible[^1].OpenTime;
 
-            var openTimes = eligibleKlines
-                .Select(kline => kline.OpenTime)
-                .ToArray();
+            var openTimes = eligible.Select(c => c.OpenTime).ToArray();
 
             var existingKlines = await dbContext.KlineData
-                .Where(kline =>
-                    kline.SymbolId == symbol.Id &&
-                    kline.IntervalId == interval.Id &&
-                    openTimes.Contains(kline.OpenTime))
+                .Where(k =>
+                    k.SymbolId   == symbol.Id &&
+                    k.IntervalId == interval.Id &&
+                    openTimes.Contains(k.OpenTime))
                 .ToListAsync(cancellationToken);
 
-            var existingKlinesByOpenTime = existingKlines.ToDictionary(kline => kline.OpenTime);
-            var newKlines = eligibleKlines
-                .Where(kline => !existingKlinesByOpenTime.ContainsKey(kline.OpenTime))
-                .Select(kline => ToKlineData(kline, symbol.Id, interval.Id))
+            var existingByOpenTime = existingKlines.ToDictionary(k => k.OpenTime);
+
+            var newKlines = eligible
+                .Where(c => !existingByOpenTime.ContainsKey(c.OpenTime))
+                .Select(c => ToKlineData(c, symbol.Id, interval.Id))
                 .ToArray();
 
             var changedOpenTimes = new List<DateTimeOffset>();
-            var changedCount = 0;
-            foreach (var sourceKline in eligibleKlines)
+            var changedCount     = 0;
+
+            foreach (var candle in eligible)
             {
-                if (!existingKlinesByOpenTime.TryGetValue(sourceKline.OpenTime, out var existingKline))
+                if (!existingByOpenTime.TryGetValue(candle.OpenTime, out var existing))
                     continue;
 
-                if (ApplyChanges(existingKline, sourceKline))
+                if (ApplyChanges(existing, candle))
                 {
-                    changedOpenTimes.Add(existingKline.OpenTime);
+                    changedOpenTimes.Add(existing.OpenTime);
                     changedCount++;
                 }
             }
 
-            skippedCount += eligibleKlines.Length - newKlines.Length - changedCount;
+            skippedCount += eligible.Length - newKlines.Length - changedCount;
 
             if (newKlines.Length > 0)
             {
@@ -102,13 +96,9 @@ public sealed class DataCollectorService(
                 await dbContext.SaveChangesAsync(cancellationToken);
                 updatedCount += changedCount;
 
-                // Determine the indicator recompute range.
-                // A changed candle invalidates RSI (Wilder smoothing) and MACD (EMA carry) for every
-                // subsequent candle in the series, so extend the recompute window to the latest stored
-                // candle rather than capping at an arbitrary bar count.
                 var allAffectedTimes = newKlines.Select(k => k.OpenTime).Concat(changedOpenTimes).ToList();
-                var indicatorFrom = allAffectedTimes.Min();
-                var indicatorTo = allAffectedTimes.Max();
+                var indicatorFrom    = allAffectedTimes.Min();
+                var indicatorTo      = allAffectedTimes.Max();
 
                 if (changedOpenTimes.Count > 0)
                 {
@@ -123,11 +113,9 @@ public sealed class DataCollectorService(
                     symbol.Id, interval.Id, indicatorFrom, indicatorTo, cancellationToken);
             }
 
-            var nextCursor = eligibleKlines[^1].OpenTime.Add(interval.Duration);
+            var nextCursor = eligible[^1].OpenTime.Add(interval.Duration);
             if (nextCursor <= cursor)
-            {
                 break;
-            }
 
             cursor = nextCursor;
         }
@@ -153,8 +141,9 @@ public sealed class DataCollectorService(
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolCode);
         ArgumentException.ThrowIfNullOrWhiteSpace(intervalCode);
 
-        var symbol = await dbContext.Symbols.SingleAsync(s => s.Code == symbolCode, cancellationToken);
+        var symbol   = await dbContext.Symbols.SingleAsync(s => s.Code == symbolCode, cancellationToken);
         var interval = await dbContext.Intervals.SingleAsync(i => i.Code == intervalCode, cancellationToken);
+        var provider = providerFactory.GetProvider(symbol.Provider);
 
         var openTimes = await dbContext.KlineData
             .AsNoTracking()
@@ -188,8 +177,8 @@ public sealed class DataCollectorService(
                 FetchedCount: 0, InsertedCount: 0, UpdatedCount: 0, SkippedCount: 0);
         }
 
-        var fetchedCount = 0;
-        var insertedCount = 0;
+        var fetchedCount         = 0;
+        var insertedCount        = 0;
         DateTimeOffset? latestCandleOpenTime = openTimes[^1];
 
         foreach (var (gapStart, gapEnd) in gaps)
@@ -199,14 +188,14 @@ public sealed class DataCollectorService(
 
             while (true)
             {
-                var klines = await binanceMarketDataService.GetKlinesAsync(
+                var candles = await provider.GetCandlesAsync(
                     symbol.Code, interval.Code,
                     cursor, gapEnd,
-                    BinanceMaxKlineLimit, cancellationToken);
+                    provider.MaxPageSize, cancellationToken);
 
-                var eligible = klines
-                    .Where(k => k.OpenTime >= gapStart && (gapEnd is null || k.OpenTime < gapEnd))
-                    .OrderBy(k => k.OpenTime)
+                var eligible = candles
+                    .Where(c => c.OpenTime >= gapStart && (gapEnd is null || c.OpenTime < gapEnd))
+                    .OrderBy(c => c.OpenTime)
                     .ToArray();
 
                 if (eligible.Length == 0)
@@ -214,32 +203,31 @@ public sealed class DataCollectorService(
 
                 fetchedCount += eligible.Length;
 
-                // Guard against a race with the live streamer: skip candles already persisted.
-                var batchOpenTimes = eligible.Select(k => k.OpenTime).ToList();
-                var existingTimes = await dbContext.KlineData
-                    .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id
-                                && batchOpenTimes.Contains(k.OpenTime))
+                var batchOpenTimes = eligible.Select(c => c.OpenTime).ToList();
+                var existingTimes  = await dbContext.KlineData
+                    .Where(k => k.SymbolId   == symbol.Id
+                             && k.IntervalId == interval.Id
+                             && batchOpenTimes.Contains(k.OpenTime))
                     .Select(k => k.OpenTime)
                     .ToHashSetAsync(cancellationToken);
 
                 var toInsert = eligible
-                    .Where(k => !existingTimes.Contains(k.OpenTime))
-                    .Select(k => ToKlineData(k, symbol.Id, interval.Id))
+                    .Where(c => !existingTimes.Contains(c.OpenTime))
+                    .Select(c => ToKlineData(c, symbol.Id, interval.Id))
                     .ToArray();
 
                 if (toInsert.Length > 0)
                 {
                     dbContext.KlineData.AddRange(toInsert);
                     await dbContext.SaveChangesAsync(cancellationToken);
-                    insertedCount += toInsert.Length;
-
+                    insertedCount      += toInsert.Length;
                     firstInsertedInGap ??= toInsert[0].OpenTime;
                 }
 
                 if (eligible[^1].OpenTime > latestCandleOpenTime)
                     latestCandleOpenTime = eligible[^1].OpenTime;
 
-                if (eligible.Length < BinanceMaxKlineLimit)
+                if (eligible.Length < provider.MaxPageSize)
                     break;
 
                 var nextCursor = eligible[^1].OpenTime.Add(interval.Duration);
@@ -251,9 +239,6 @@ public sealed class DataCollectorService(
                 cursor = nextCursor;
             }
 
-            // Sync indicators once per gap, extending the recompute window to the latest candle
-            // in the series. Filling an internal gap makes every downstream SMA/RSI/MACD row stale,
-            // so the range must cover the full tail, not just the inserted segment.
             if (firstInsertedInGap is not null)
             {
                 var latestInDb = await dbContext.KlineData
@@ -274,54 +259,47 @@ public sealed class DataCollectorService(
             fetchedCount, insertedCount, UpdatedCount: 0, SkippedCount: 0);
     }
 
-    private static KlineData ToKlineData(BinanceKline kline, int symbolId, int intervalId)
-    {
-        return new KlineData
+    private static KlineData ToKlineData(Candle candle, int symbolId, int intervalId) =>
+        new()
         {
-            SymbolId = symbolId,
-            IntervalId = intervalId,
-            OpenTime = kline.OpenTime.ToUniversalTime(),
-            CloseTime = kline.CloseTime.ToUniversalTime(),
-            Open = kline.Open,
-            High = kline.High,
-            Low = kline.Low,
-            Close = kline.Close,
-            Volume = kline.Volume,
-            QuoteAssetVolume = kline.QuoteAssetVolume,
-            NumberOfTrades = kline.NumberOfTrades,
-            TakerBuyBaseAssetVolume = kline.TakerBuyBaseAssetVolume,
-            TakerBuyQuoteAssetVolume = kline.TakerBuyQuoteAssetVolume,
-            CreatedAt = DateTimeOffset.UtcNow
+            SymbolId                = symbolId,
+            IntervalId              = intervalId,
+            OpenTime                = candle.OpenTime.ToUniversalTime(),
+            CloseTime               = candle.CloseTime.ToUniversalTime(),
+            Open                    = candle.Open,
+            High                    = candle.High,
+            Low                     = candle.Low,
+            Close                   = candle.Close,
+            Volume                  = candle.Volume,
+            QuoteAssetVolume        = candle.QuoteAssetVolume,
+            NumberOfTrades          = candle.NumberOfTrades,
+            TakerBuyBaseAssetVolume  = candle.TakerBuyBaseVolume,
+            TakerBuyQuoteAssetVolume = candle.TakerBuyQuoteVolume,
+            CreatedAt               = DateTimeOffset.UtcNow,
         };
+
+    private static bool ApplyChanges(KlineData target, Candle source)
+    {
+        var changed = false;
+
+        changed |= SetIfChanged(target.CloseTime,               source.CloseTime.ToUniversalTime(),  v => target.CloseTime               = v);
+        changed |= SetIfChanged(target.Open,                    source.Open,                         v => target.Open                    = v);
+        changed |= SetIfChanged(target.High,                    source.High,                         v => target.High                    = v);
+        changed |= SetIfChanged(target.Low,                     source.Low,                          v => target.Low                     = v);
+        changed |= SetIfChanged(target.Close,                   source.Close,                        v => target.Close                   = v);
+        changed |= SetIfChanged(target.Volume,                  source.Volume,                       v => target.Volume                  = v);
+        changed |= SetIfChanged(target.QuoteAssetVolume,        source.QuoteAssetVolume,             v => target.QuoteAssetVolume        = v);
+        changed |= SetIfChanged(target.NumberOfTrades,          source.NumberOfTrades,               v => target.NumberOfTrades          = v);
+        changed |= SetIfChanged(target.TakerBuyBaseAssetVolume,  source.TakerBuyBaseVolume,           v => target.TakerBuyBaseAssetVolume  = v);
+        changed |= SetIfChanged(target.TakerBuyQuoteAssetVolume, source.TakerBuyQuoteVolume,          v => target.TakerBuyQuoteAssetVolume = v);
+
+        return changed;
     }
 
-    private static bool ApplyChanges(KlineData target, BinanceKline source)
+    private static bool SetIfChanged<T>(T current, T next, Action<T> set) where T : IEquatable<T>
     {
-        var hasChanges = false;
-
-        hasChanges |= SetIfChanged(target.CloseTime, source.CloseTime.ToUniversalTime(), value => target.CloseTime = value);
-        hasChanges |= SetIfChanged(target.Open, source.Open, value => target.Open = value);
-        hasChanges |= SetIfChanged(target.High, source.High, value => target.High = value);
-        hasChanges |= SetIfChanged(target.Low, source.Low, value => target.Low = value);
-        hasChanges |= SetIfChanged(target.Close, source.Close, value => target.Close = value);
-        hasChanges |= SetIfChanged(target.Volume, source.Volume, value => target.Volume = value);
-        hasChanges |= SetIfChanged(target.QuoteAssetVolume, source.QuoteAssetVolume, value => target.QuoteAssetVolume = value);
-        hasChanges |= SetIfChanged(target.NumberOfTrades, source.NumberOfTrades, value => target.NumberOfTrades = value);
-        hasChanges |= SetIfChanged(target.TakerBuyBaseAssetVolume, source.TakerBuyBaseAssetVolume, value => target.TakerBuyBaseAssetVolume = value);
-        hasChanges |= SetIfChanged(target.TakerBuyQuoteAssetVolume, source.TakerBuyQuoteAssetVolume, value => target.TakerBuyQuoteAssetVolume = value);
-
-        return hasChanges;
-    }
-
-    private static bool SetIfChanged<T>(T currentValue, T newValue, Action<T> setValue)
-        where T : IEquatable<T>
-    {
-        if (currentValue.Equals(newValue))
-        {
-            return false;
-        }
-
-        setValue(newValue);
+        if (current.Equals(next)) return false;
+        set(next);
         return true;
     }
 }

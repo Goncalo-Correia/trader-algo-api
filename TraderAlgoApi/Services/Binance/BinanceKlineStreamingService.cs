@@ -2,6 +2,8 @@ using System.Net.WebSockets;
 using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
 using TraderAlgoApi.Models;
+using TraderAlgoApi.Models.Enums;
+using TraderAlgoApi.Services.Charts;
 using TraderAlgoApi.Services.Indicators;
 using TraderAlgoApi.Services.MarketData;
 using TraderAlgoApi.Services.PriceFeeds;
@@ -13,6 +15,7 @@ public sealed class BinanceKlineStreamingService(
     IConfiguration configuration,
     PriceFeed priceFeed,
     ClosedCandleFeed closedCandleFeed,
+    CandleAggregator candleAggregator,
     ILogger<BinanceKlineStreamingService> logger) : BackgroundService
 {
     private const string DefaultWebSocketBaseUrl = "wss://stream.binance.com:443";
@@ -88,6 +91,7 @@ public sealed class BinanceKlineStreamingService(
                 continue;
 
             priceFeed.Publish(kline.Symbol, kline.Close);
+            candleAggregator.OnTick(kline.Symbol, kline.Interval, kline.Close, DateTimeOffset.UtcNow);
 
             if (!kline.IsClosed)
                 continue;
@@ -153,6 +157,11 @@ public sealed class BinanceKlineStreamingService(
             OpenTime: kline.OpenTime,
             Close: kline.Close));
 
+        candleAggregator.OnCandleClosed(
+            kline.Symbol, kline.Interval,
+            kline.OpenTime, kline.Open, kline.High, kline.Low, kline.Close,
+            kline.Volume);
+
         logger.LogInformation(
             "Stored closed kline {Symbol}/{Interval} {OpenTime}",
             kline.Symbol, kline.Interval, kline.OpenTime);
@@ -164,7 +173,7 @@ public sealed class BinanceKlineStreamingService(
     {
         var symbols = await dbContext.Symbols
             .AsNoTracking()
-            .Where(s => s.IsActive)
+            .Where(s => s.IsActive && s.Provider == SymbolProvider.Binance)
             .Select(s => s.Code)
             .ToListAsync(cancellationToken);
 
