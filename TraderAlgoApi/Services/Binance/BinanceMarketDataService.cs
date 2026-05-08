@@ -2,6 +2,7 @@ using System.Net.WebSockets;
 using System.Text.Json;
 using TraderAlgoApi.Dtos.Charts;
 using TraderAlgoApi.Services.Indicators;
+using TraderAlgoApi.Services.MarketData;
 
 namespace TraderAlgoApi.Services.Binance;
 
@@ -11,7 +12,7 @@ public sealed class BinanceMarketDataService(
     ILogger<BinanceMarketDataService> logger,
     ISimpleMovingAverageService smaService,
     IRsiService rsiService,
-    IMacdService macdService) : IBinanceMarketDataService
+    IMacdService macdService) : IBinanceMarketDataService, IMarketDataProvider
 {
     private const string HttpClientName = "Binance";
     private const string DefaultWebSocketBaseUrl = "wss://stream.binance.com:443";
@@ -61,6 +62,35 @@ public sealed class BinanceMarketDataService(
             .Select(BinanceKline.FromJsonArray)
             .ToArray();
     }
+
+    // ── IMarketDataProvider ───────────────────────────────────────────────────
+
+    public int MaxPageSize => 1000;
+
+    async Task<IReadOnlyList<Candle>> IMarketDataProvider.GetCandlesAsync(
+        string symbol,
+        string intervalCode,
+        DateTimeOffset? startTime,
+        DateTimeOffset? endTime,
+        int? limit,
+        CancellationToken cancellationToken)
+    {
+        var klines = await GetKlinesAsync(symbol, intervalCode, startTime, endTime, limit, cancellationToken);
+        return klines.Select(k => new Candle(
+            OpenTime:           k.OpenTime,
+            CloseTime:          k.CloseTime,
+            Open:               k.Open,
+            High:               k.High,
+            Low:                k.Low,
+            Close:              k.Close,
+            Volume:             k.Volume,
+            QuoteAssetVolume:   k.QuoteAssetVolume,
+            NumberOfTrades:     k.NumberOfTrades,
+            TakerBuyBaseVolume: k.TakerBuyBaseAssetVolume,
+            TakerBuyQuoteVolume: k.TakerBuyQuoteAssetVolume)).ToArray();
+    }
+
+    // ── IBinanceMarketDataService ─────────────────────────────────────────────
 
     public async Task StreamKlineCandlesAsync(
         WebSocket clientSocket,

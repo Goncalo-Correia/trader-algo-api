@@ -50,19 +50,21 @@ public sealed class DataCollectorTimer(
             {
                 try
                 {
-                    var result = await dataCollectorService.CollectKlinesAsync(
+                    // SyncGapsAsync only fetches bars that are missing — much cheaper than
+                    // CollectKlinesAsync which re-downloads from DataStartDate every night.
+                    var result = await dataCollectorService.SyncGapsAsync(
                         symbol.Code,
                         interval.Code,
                         DataStartDate,
                         cancellationToken);
 
                     logger.LogInformation(
-                        "Collected {Symbol}/{Interval}: {Inserted} inserted, {Updated} updated, {Skipped} skipped",
-                        result.Symbol, result.Interval, result.InsertedCount, result.UpdatedCount, result.SkippedCount);
+                        "Synced {Symbol}/{Interval}: {Inserted} inserted, {Skipped} skipped",
+                        result.Symbol, result.Interval, result.InsertedCount, result.SkippedCount);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    logger.LogError(ex, "Failed to collect data for {Symbol}/{Interval}", symbol.Code, interval.Code);
+                    logger.LogError(ex, "Failed to sync data for {Symbol}/{Interval}", symbol.Code, interval.Code);
                 }
             }
         }
