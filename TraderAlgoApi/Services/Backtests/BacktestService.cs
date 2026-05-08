@@ -49,7 +49,7 @@ public sealed class BacktestService(
             From       = request.From,
             To                = request.To,
             StartedAt         = now,
-            Status            = BacktestStatus.Pending,
+            StatusId          = (int)BacktestStatus.Pending,
             InitialBalance    = request.InitialBalance,
             CandleCount       = 0
         };
@@ -164,7 +164,7 @@ public sealed class BacktestService(
             To:             backtest.To.ToUnixTimeSeconds(),
             StartedAt:      backtest.StartedAt.ToUnixTimeMilliseconds(),
             CompletedAt:    backtest.CompletedAt?.ToUnixTimeMilliseconds(),
-            Status:         backtest.Status,
+            Status:         (BacktestStatus)backtest.StatusId,
             InitialBalance: backtest.InitialBalance,
             FinalBalance:   backtest.FinalBalance,
             Pnl:            backtest.Pnl,
@@ -270,7 +270,7 @@ public sealed class BacktestService(
             To:             b.To.ToUnixTimeSeconds(),
             StartedAt:      b.StartedAt.ToUnixTimeMilliseconds(),
             CompletedAt:    b.CompletedAt?.ToUnixTimeMilliseconds(),
-            Status:         b.Status,
+            Status:         (BacktestStatus)b.StatusId,
             InitialBalance: b.InitialBalance,
             FinalBalance:   b.FinalBalance,
             Pnl:            b.Pnl,

@@ -2,6 +2,6 @@ namespace TraderAlgoApi.Models.Enums;
 
 public enum SymbolProvider
 {
-    Binance = 0,
-    Alpaca  = 1,
+    Binance = 1,
+    Alpaca  = 2,
 }

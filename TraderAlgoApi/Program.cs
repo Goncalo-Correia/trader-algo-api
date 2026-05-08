@@ -85,7 +85,8 @@ builder.Services.AddScoped<IMacdService, MacdService>();
 builder.Services.AddScoped<IIndicatorSyncService, IndicatorSyncService>();
 
 // ── Data collection ───────────────────────────────────────────────────────────
-builder.Services.AddScoped<IDataCollectorService, DataCollectorService>();
+builder.Services.AddScoped<IBinanceDataCollectorService, BinanceDataCollectorService>();
+builder.Services.AddScoped<IAlpacaDataCollectorService, AlpacaDataCollectorService>();
 builder.Services.AddHostedService<DataCollectorTimer>();
 
 // ── Live charts ───────────────────────────────────────────────────────────────

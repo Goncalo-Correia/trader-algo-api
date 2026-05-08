@@ -66,7 +66,7 @@ public sealed class AlpacaRestPollingService(
 
         var alpacaSymbols = await db.Symbols
             .AsNoTracking()
-            .Where(s => s.IsActive && s.Provider == SymbolProvider.Alpaca)
+            .Where(s => s.IsActive && s.ProviderId == (int)SymbolProvider.Alpaca)
             .ToListAsync(ct);
 
         var intervals = await db.Intervals

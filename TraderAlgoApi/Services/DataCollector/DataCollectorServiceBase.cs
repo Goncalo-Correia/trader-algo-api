@@ -6,9 +6,9 @@ using TraderAlgoApi.Services.MarketData;
 
 namespace TraderAlgoApi.Services.DataCollector;
 
-public sealed class DataCollectorService(
+public class DataCollectorServiceBase(
     ApplicationDbContext dbContext,
-    IMarketDataProviderFactory providerFactory,
+    IMarketDataProvider provider,
     IIndicatorSyncService indicatorSyncService) : IDataCollectorService
 {
     public async Task<DataCollectionResult> CollectKlinesAsync(
@@ -22,7 +22,6 @@ public sealed class DataCollectorService(
 
         var symbol   = await dbContext.Symbols.SingleAsync(s => s.Code == symbolCode, cancellationToken);
         var interval = await dbContext.Intervals.SingleAsync(i => i.Code == intervalCode, cancellationToken);
-        var provider = providerFactory.GetProvider(symbol.Provider);
 
         var fetchedCount  = 0;
         var insertedCount = 0;
@@ -143,7 +142,6 @@ public sealed class DataCollectorService(
 
         var symbol   = await dbContext.Symbols.SingleAsync(s => s.Code == symbolCode, cancellationToken);
         var interval = await dbContext.Intervals.SingleAsync(i => i.Code == intervalCode, cancellationToken);
-        var provider = providerFactory.GetProvider(symbol.Provider);
 
         var openTimes = await dbContext.KlineData
             .AsNoTracking()
@@ -262,34 +260,34 @@ public sealed class DataCollectorService(
     private static KlineData ToKlineData(Candle candle, int symbolId, int intervalId) =>
         new()
         {
-            SymbolId                = symbolId,
-            IntervalId              = intervalId,
-            OpenTime                = candle.OpenTime.ToUniversalTime(),
-            CloseTime               = candle.CloseTime.ToUniversalTime(),
-            Open                    = candle.Open,
-            High                    = candle.High,
-            Low                     = candle.Low,
-            Close                   = candle.Close,
-            Volume                  = candle.Volume,
-            QuoteAssetVolume        = candle.QuoteAssetVolume,
-            NumberOfTrades          = candle.NumberOfTrades,
+            SymbolId                 = symbolId,
+            IntervalId               = intervalId,
+            OpenTime                 = candle.OpenTime.ToUniversalTime(),
+            CloseTime                = candle.CloseTime.ToUniversalTime(),
+            Open                     = candle.Open,
+            High                     = candle.High,
+            Low                      = candle.Low,
+            Close                    = candle.Close,
+            Volume                   = candle.Volume,
+            QuoteAssetVolume         = candle.QuoteAssetVolume,
+            NumberOfTrades           = candle.NumberOfTrades,
             TakerBuyBaseAssetVolume  = candle.TakerBuyBaseVolume,
             TakerBuyQuoteAssetVolume = candle.TakerBuyQuoteVolume,
-            CreatedAt               = DateTimeOffset.UtcNow,
+            CreatedAt                = DateTimeOffset.UtcNow,
         };
 
     private static bool ApplyChanges(KlineData target, Candle source)
     {
         var changed = false;
 
-        changed |= SetIfChanged(target.CloseTime,               source.CloseTime.ToUniversalTime(),  v => target.CloseTime               = v);
-        changed |= SetIfChanged(target.Open,                    source.Open,                         v => target.Open                    = v);
-        changed |= SetIfChanged(target.High,                    source.High,                         v => target.High                    = v);
-        changed |= SetIfChanged(target.Low,                     source.Low,                          v => target.Low                     = v);
-        changed |= SetIfChanged(target.Close,                   source.Close,                        v => target.Close                   = v);
-        changed |= SetIfChanged(target.Volume,                  source.Volume,                       v => target.Volume                  = v);
-        changed |= SetIfChanged(target.QuoteAssetVolume,        source.QuoteAssetVolume,             v => target.QuoteAssetVolume        = v);
-        changed |= SetIfChanged(target.NumberOfTrades,          source.NumberOfTrades,               v => target.NumberOfTrades          = v);
+        changed |= SetIfChanged(target.CloseTime,                source.CloseTime.ToUniversalTime(),  v => target.CloseTime                = v);
+        changed |= SetIfChanged(target.Open,                     source.Open,                         v => target.Open                     = v);
+        changed |= SetIfChanged(target.High,                     source.High,                         v => target.High                     = v);
+        changed |= SetIfChanged(target.Low,                      source.Low,                          v => target.Low                      = v);
+        changed |= SetIfChanged(target.Close,                    source.Close,                        v => target.Close                    = v);
+        changed |= SetIfChanged(target.Volume,                   source.Volume,                       v => target.Volume                   = v);
+        changed |= SetIfChanged(target.QuoteAssetVolume,         source.QuoteAssetVolume,             v => target.QuoteAssetVolume         = v);
+        changed |= SetIfChanged(target.NumberOfTrades,           source.NumberOfTrades,               v => target.NumberOfTrades           = v);
         changed |= SetIfChanged(target.TakerBuyBaseAssetVolume,  source.TakerBuyBaseVolume,           v => target.TakerBuyBaseAssetVolume  = v);
         changed |= SetIfChanged(target.TakerBuyQuoteAssetVolume, source.TakerBuyQuoteVolume,          v => target.TakerBuyQuoteAssetVolume = v);
 
