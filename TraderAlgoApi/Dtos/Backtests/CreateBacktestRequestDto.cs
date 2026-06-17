@@ -13,6 +13,8 @@ public sealed record CreateBacktestRequestDto(
     [property: JsonPropertyName("stopLoss")]       decimal? StopLoss = null,
     [property: JsonPropertyName("takeProfit")]     decimal? TakeProfit = null,
     [property: JsonPropertyName("breakeven")]       decimal? Breakeven = null,
+    [property: JsonPropertyName("breakevenStop")]   decimal? BreakevenStop = null,
+    [property: JsonPropertyName("fee")]             decimal Fee = 0,
     [property: JsonPropertyName("isNySessionOnly")] bool IsNySessionOnly = false,
     [property: JsonPropertyName("dailyProfitGoal")] decimal? DailyProfitGoal = null,
     [property: JsonPropertyName("maxLossesPerDay")]   int? MaxLossesPerDay = null,

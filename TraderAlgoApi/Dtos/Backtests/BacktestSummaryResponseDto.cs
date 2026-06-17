@@ -21,9 +21,13 @@ public sealed record BacktestSummaryResponseDto(
     [property: JsonPropertyName("stopLoss")]       decimal? StopLoss,
     [property: JsonPropertyName("takeProfit")]     decimal? TakeProfit,
     [property: JsonPropertyName("breakeven")]       decimal? Breakeven,
+    [property: JsonPropertyName("breakevenStop")]   decimal? BreakevenStop,
     [property: JsonPropertyName("isNySessionOnly")] bool IsNySessionOnly,
+    [property: JsonPropertyName("delay")]           bool Delay,
     [property: JsonPropertyName("dailyProfitGoal")] decimal? DailyProfitGoal,
     [property: JsonPropertyName("maxLossesPerDay")]   int? MaxLossesPerDay,
     [property: JsonPropertyName("maxCandlesPerTrade")] int? MaxCandlesPerTrade,
-    [property: JsonPropertyName("candleCount")]    int CandleCount,
-    [property: JsonPropertyName("tradeCount")]     int TradeCount);
+    [property: JsonPropertyName("candleCount")]          int CandleCount,
+    [property: JsonPropertyName("tradeCount")]           int TradeCount,
+    [property: JsonPropertyName("maxDrawdown")]          decimal? MaxDrawdown,
+    [property: JsonPropertyName("maxTrailingDrawdown")]  decimal? MaxTrailingDrawdown);

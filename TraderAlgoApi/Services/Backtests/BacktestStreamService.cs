@@ -37,6 +37,7 @@ public sealed class BacktestStreamService(
     public async Task StreamAsync(
         HttpContext context,
         long backtestId,
+        bool delay = false,
         CancellationToken cancellationToken = default)
     {
         if (!context.WebSockets.IsWebSocketRequest)
@@ -83,7 +84,7 @@ public sealed class BacktestStreamService(
 
         try
         {
-            await RunSimulationAsync(clientSocket, backtest, linked.Token);
+            await RunSimulationAsync(clientSocket, backtest, delay, linked.Token);
 
             backtest.StatusId = (int)BacktestStatus.Completed;
             backtest.CompletedAt = timeProvider.GetUtcNow();
@@ -120,7 +121,7 @@ public sealed class BacktestStreamService(
         finally
         {
             await monitorTask;
-            await DeleteLinkedTradeBotAsync(backtest.Id);
+            await DisableLinkedTradeBotAsync(backtest.Id);
         }
     }
 
@@ -131,6 +132,7 @@ public sealed class BacktestStreamService(
     private async Task RunSimulationAsync(
         WebSocket clientSocket,
         Backtest backtest,
+        bool delay,
         CancellationToken cancellationToken)
     {
         var bot = backtest.TradeBot!;
@@ -267,7 +269,7 @@ public sealed class BacktestStreamService(
                 var breakevenTriggered = CheckBreakeven(openTrade, current, bot.Breakeven.Value);
                 if (breakevenTriggered)
                 {
-                    openTrade.StopLoss = 0;
+                    openTrade.StopLoss = bot.BreakevenStop.HasValue ? -bot.BreakevenStop.Value : 0m;
                     await dbContext.SaveChangesAsync(cancellationToken);
 
                     var bracketUpdate = new TradeBracketUpdateDto(
@@ -329,8 +331,8 @@ public sealed class BacktestStreamService(
                 }
             }
 
-            // Pace the stream: one candle every 0.1 seconds.
-            await Task.Delay(CandleInterval, cancellationToken);
+            if (delay)
+                await Task.Delay(CandleInterval, cancellationToken);
 
             // Send candle to client.
             var candleDto = ToDto(current);
@@ -361,11 +363,13 @@ public sealed class BacktestStreamService(
     // Helpers
     // -------------------------------------------------------------------------
 
-    private async Task DeleteLinkedTradeBotAsync(long backtestId)
+    private async Task DisableLinkedTradeBotAsync(long backtestId)
     {
         await dbContext.TradeBots
             .Where(b => b.BacktestId == backtestId)
-            .ExecuteDeleteAsync(CancellationToken.None);
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(b => b.IsEnabled, false),
+                CancellationToken.None);
     }
 
     private static bool IsNySessionCandle(KlineData k)
@@ -532,11 +536,13 @@ public sealed class BacktestStreamService(
         trade.ClosedAt      = time;
         trade.ClosedPrice   = closePrice;
         trade.CloseReasonId = (int)reason;
-        trade.Pnl           = trade.SideId == (int)TradeSide.Buy
+        var rawPnl = trade.SideId == (int)TradeSide.Buy
             ? (closePrice - trade.EntryPrice!.Value) * trade.Quantity
             : (trade.EntryPrice!.Value - closePrice) * trade.Quantity;
 
-        balance += trade.Pnl.Value;
+        trade.Pnl       = rawPnl - trade.Fee;
+        balance        += trade.Pnl.Value;
+        trade.AccountPnl = balance;
     }
 
     private static CandleWithIndicatorsResponseDto ToDto(KlineData k) =>

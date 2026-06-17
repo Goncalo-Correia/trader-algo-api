@@ -23,15 +23,20 @@ public sealed record BacktestDetailResponseDto(
     [property: JsonPropertyName("stopLoss")]       decimal? StopLoss,
     [property: JsonPropertyName("takeProfit")]     decimal? TakeProfit,
     [property: JsonPropertyName("breakeven")]       decimal? Breakeven,
+    [property: JsonPropertyName("breakevenStop")]   decimal? BreakevenStop,
     [property: JsonPropertyName("isNySessionOnly")] bool IsNySessionOnly,
+    [property: JsonPropertyName("delay")]           bool Delay,
     [property: JsonPropertyName("dailyProfitGoal")] decimal? DailyProfitGoal,
     [property: JsonPropertyName("maxLossesPerDay")]   int? MaxLossesPerDay,
     [property: JsonPropertyName("maxCandlesPerTrade")] int? MaxCandlesPerTrade,
-    [property: JsonPropertyName("candleCount")]    int CandleCount,
-    [property: JsonPropertyName("trades")]         IReadOnlyList<TradeResponseDto> Trades,
-    [property: JsonPropertyName("candles")]        IReadOnlyList<CandleWithIndicatorsResponseDto> Candles,
-    [property: JsonPropertyName("equityCurve")]    IReadOnlyList<EquityPointDto> EquityCurve);
+    [property: JsonPropertyName("candleCount")]           int CandleCount,
+    [property: JsonPropertyName("maxDrawdown")]           decimal? MaxDrawdown,
+    [property: JsonPropertyName("maxTrailingDrawdown")]   decimal? MaxTrailingDrawdown,
+    [property: JsonPropertyName("trades")]                IReadOnlyList<TradeResponseDto> Trades,
+    [property: JsonPropertyName("candles")]               IReadOnlyList<CandleWithIndicatorsResponseDto> Candles,
+    [property: JsonPropertyName("equityCurve")]           IReadOnlyList<EquityPointDto> EquityCurve);
 
 public sealed record EquityPointDto(
-    [property: JsonPropertyName("time")]    long Time,
-    [property: JsonPropertyName("balance")] decimal Balance);
+    [property: JsonPropertyName("time")]     long Time,
+    [property: JsonPropertyName("balance")]  decimal Balance,
+    [property: JsonPropertyName("tradePnl")] decimal? TradePnl);

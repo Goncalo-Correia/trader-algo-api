@@ -84,7 +84,8 @@ public sealed class TradeService(
                 StatusId         = (int)TradeStatus.Active,
                 CreatedAt        = now,
                 OpenedAt         = now,
-                TradingAccountId = request.TradingAccountId
+                TradingAccountId = request.TradingAccountId,
+                Fee              = request.Fee
             };
         }
         else
@@ -104,7 +105,8 @@ public sealed class TradeService(
                 TakeProfit       = request.TakeProfit,
                 StatusId         = (int)TradeStatus.Pending,
                 CreatedAt        = now,
-                TradingAccountId = request.TradingAccountId
+                TradingAccountId = request.TradingAccountId,
+                Fee              = request.Fee
             };
         }
 
@@ -441,7 +443,9 @@ public sealed class TradeService(
             ClosedAt:         t.ClosedAt?.ToUnixTimeMilliseconds(),
             ClosedPrice:      t.ClosedPrice,
             CloseReason:      t.CloseReasonId is int id ? (TradeCloseReason)id : null,
+            Fee:              t.Fee,
             Pnl:              t.Pnl,
+            AccountPnl:       null,
             UnrealizedPnl:    unrealizedPnl,
             TradingAccountId: t.TradingAccountId,
             BacktestId:       t.BacktestId);
@@ -452,9 +456,11 @@ public sealed class TradeService(
         if (trade.EntryPrice is null)
             return null;
 
-        return trade.SideId == (int)TradeSide.Buy
+        var rawPnl = trade.SideId == (int)TradeSide.Buy
             ? (closedPrice - trade.EntryPrice.Value) * trade.Quantity
             : (trade.EntryPrice.Value - closedPrice) * trade.Quantity;
+
+        return rawPnl - trade.Fee;
     }
 
     private void PublishTradeEvent(string type, TradeResponseDto trade, string message)

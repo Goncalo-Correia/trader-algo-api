@@ -68,6 +68,14 @@ public sealed class Trade
     [Precision(28, 10)]
     public decimal? Pnl { get; set; }
 
+    /// <summary>Running account balance after this trade closed. Null for live trades and while open.</summary>
+    [Precision(28, 10)]
+    public decimal? AccountPnl { get; set; }
+
+    /// <summary>Fee deducted from PnL on close. Defaults to zero.</summary>
+    [Precision(28, 10)]
+    public decimal Fee { get; set; }
+
     public int? CloseReasonId { get; set; }
 
     [ForeignKey(nameof(CloseReasonId))]

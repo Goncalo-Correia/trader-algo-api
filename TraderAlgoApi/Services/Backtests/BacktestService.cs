@@ -68,6 +68,8 @@ public sealed class BacktestService(
             StopLoss           = stopLoss,
             TakeProfit         = takeProfit,
             Breakeven          = request.Breakeven,
+            BreakevenStop      = request.BreakevenStop,
+            Fee                = request.Fee,
             IsNySessionOnly    = request.IsNySessionOnly,
             DailyProfitGoal    = request.DailyProfitGoal,
             MaxLossesPerDay    = request.MaxLossesPerDay,
@@ -149,10 +151,11 @@ public sealed class BacktestService(
 
         var tradeDtos = backtest.Trades
             .OrderBy(t => t.OpenedAt)
-            .Select(TradeToDto)
+            .Select(t => TradeToDto(t, t.AccountPnl))
             .ToList();
 
         var equity = BuildEquityCurve(backtest);
+        var (maxDrawdown, maxTrailingDrawdown) = ComputeDrawdowns(equity, backtest.InitialBalance);
 
         return new BacktestDetailResponseDto(
             Id:             backtest.Id,
@@ -172,11 +175,15 @@ public sealed class BacktestService(
             StopLoss:       backtest.TradeBot?.StopLoss,
             TakeProfit:     backtest.TradeBot?.TakeProfit,
             Breakeven:      backtest.TradeBot?.Breakeven,
+            BreakevenStop:  backtest.TradeBot?.BreakevenStop,
             IsNySessionOnly: backtest.TradeBot?.IsNySessionOnly ?? false,
+            Delay:          backtest.TradeBot?.Delay ?? false,
             DailyProfitGoal: backtest.TradeBot?.DailyProfitGoal,
             MaxLossesPerDay: backtest.TradeBot?.MaxLossesPerDay,
             MaxCandlesPerTrade: backtest.TradeBot?.MaxCandlesPerTrade,
             CandleCount:    backtest.CandleCount,
+            MaxDrawdown:    maxDrawdown,
+            MaxTrailingDrawdown: maxTrailingDrawdown,
             Trades:         tradeDtos,
             Candles:        candles,
             EquityCurve:    equity);
@@ -239,7 +246,7 @@ public sealed class BacktestService(
     {
         var points = new List<EquityPointDto>
         {
-            new(backtest.From.ToUnixTimeSeconds(), backtest.InitialBalance)
+            new(backtest.From.ToUnixTimeSeconds(), backtest.InitialBalance, null)
         };
 
         var balance = backtest.InitialBalance;
@@ -249,18 +256,57 @@ public sealed class BacktestService(
             balance += trade.Pnl!.Value;
             points.Add(new EquityPointDto(
                 trade.ClosedAt!.Value.ToUnixTimeSeconds(),
-                balance));
+                balance,
+                trade.Pnl));
         }
 
         return points;
+    }
+
+    /// <summary>
+    /// Returns (maxDrawdown, maxTrailingDrawdown) from the equity curve.
+    /// maxDrawdown        — largest absolute dollar amount the balance dropped below the initial balance.
+    /// maxTrailingDrawdown — largest absolute dollar drop from any peak to any subsequent balance.
+    /// Both are null when there are no closed trades.
+    /// </summary>
+    private static (decimal? MaxDrawdown, decimal? MaxTrailingDrawdown) ComputeDrawdowns(
+        IReadOnlyList<EquityPointDto> equity,
+        decimal initialBalance)
+    {
+        if (equity.Count <= 1)
+            return (null, null);
+
+        var peak   = initialBalance;
+        var maxDD  = 0m;
+        var maxTDD = 0m;
+
+        foreach (var point in equity)
+        {
+            var belowStart = initialBalance - point.Balance;
+            if (belowStart > maxDD)
+                maxDD = belowStart;
+
+            if (point.Balance > peak)
+                peak = point.Balance;
+
+            var dropFromPeak = peak - point.Balance;
+            if (dropFromPeak > maxTDD)
+                maxTDD = dropFromPeak;
+        }
+
+        return (maxDD > 0 ? maxDD : null, maxTDD > 0 ? maxTDD : null);
     }
 
     private static BacktestSummaryResponseDto ToSummaryDto(
         Backtest b,
         Symbol symbol,
         Interval interval,
-        int tradeCount) =>
-        new(
+        int tradeCount)
+    {
+        var equity = BuildEquityCurve(b);
+        var (maxDrawdown, maxTrailingDrawdown) = ComputeDrawdowns(equity, b.InitialBalance);
+
+        return new(
             Id:             b.Id,
             TradeBotId:     b.TradeBotId,
             SymbolCode:     symbol.Code,
@@ -278,14 +324,19 @@ public sealed class BacktestService(
             StopLoss:       b.TradeBot?.StopLoss,
             TakeProfit:     b.TradeBot?.TakeProfit,
             Breakeven:      b.TradeBot?.Breakeven,
+            BreakevenStop:  b.TradeBot?.BreakevenStop,
             IsNySessionOnly: b.TradeBot?.IsNySessionOnly ?? false,
+            Delay:          b.TradeBot?.Delay ?? false,
             DailyProfitGoal: b.TradeBot?.DailyProfitGoal,
             MaxLossesPerDay: b.TradeBot?.MaxLossesPerDay,
             MaxCandlesPerTrade: b.TradeBot?.MaxCandlesPerTrade,
             CandleCount:    b.CandleCount,
-            TradeCount:     tradeCount);
+            TradeCount:     tradeCount,
+            MaxDrawdown:    maxDrawdown,
+            MaxTrailingDrawdown: maxTrailingDrawdown);
+    }
 
-    private static TradeResponseDto TradeToDto(Trade t) =>
+    private static TradeResponseDto TradeToDto(Trade t, decimal? accountPnl = null) =>
         new(
             Id:               t.Id,
             SymbolCode:       t.Symbol?.Code ?? string.Empty,
@@ -303,7 +354,9 @@ public sealed class BacktestService(
             ClosedAt:         t.ClosedAt?.ToUnixTimeMilliseconds(),
             ClosedPrice:      t.ClosedPrice,
             CloseReason:      t.CloseReasonId is int id ? (TradeCloseReason)id : null,
+            Fee:              t.Fee,
             Pnl:              t.Pnl,
+            AccountPnl:       accountPnl,
             UnrealizedPnl:    null,
             TradingAccountId: t.TradingAccountId,
             BacktestId:       t.BacktestId);
