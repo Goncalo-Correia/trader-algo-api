@@ -17,7 +17,7 @@ using TraderAlgoApi.Services.Rules.SmaMacd;
 namespace TraderAlgoApi.Services.Backtests;
 
 public sealed class BacktestStreamService(
-    ApplicationDbContext dbContext,
+    IDbContextFactory<ApplicationDbContext> dbContextFactory,
     SmaTradingRule smaTradingRule,
     RsiTradingRule rsiTradingRule,
     MacdTradingRule macdTradingRule,
@@ -29,10 +29,11 @@ public sealed class BacktestStreamService(
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly TimeSpan CandleInterval = TimeSpan.FromMilliseconds(100);
-    private static readonly TimeZoneInfo EasternZone =
-        TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
-    private static readonly TimeOnly NyOpen  = new(9, 30);
-    private static readonly TimeOnly NyClose = new(16, 0);
+
+    // How often to flush incremental backtest progress (candle count / balance) to the DB.
+    // Trade open/close already flush on their own; this only bounds the gap between them so a
+    // crashed run resumes from at most this many candles back instead of hammering the DB every candle.
+    private const int ProgressFlushEvery = 200;
 
     public async Task StreamAsync(
         HttpContext context,
@@ -48,6 +49,10 @@ public sealed class BacktestStreamService(
                 cancellationToken);
             return;
         }
+
+        // Own a context for the lifetime of this run instead of piggybacking the request scope's
+        // shared, long-lived DbContext.
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
 
         var backtest = await dbContext.Backtests
             .Include(b => b.Symbol)
@@ -84,7 +89,7 @@ public sealed class BacktestStreamService(
 
         try
         {
-            await RunSimulationAsync(clientSocket, backtest, delay, linked.Token);
+            await RunSimulationAsync(dbContext, clientSocket, backtest, delay, linked.Token);
 
             backtest.StatusId = (int)BacktestStatus.Completed;
             backtest.CompletedAt = timeProvider.GetUtcNow();
@@ -121,7 +126,7 @@ public sealed class BacktestStreamService(
         finally
         {
             await monitorTask;
-            await DisableLinkedTradeBotAsync(backtest.Id);
+            await DisableLinkedTradeBotAsync(dbContext, backtest.Id);
         }
     }
 
@@ -130,6 +135,7 @@ public sealed class BacktestStreamService(
     // -------------------------------------------------------------------------
 
     private async Task RunSimulationAsync(
+        ApplicationDbContext dbContext,
         WebSocket clientSocket,
         Backtest backtest,
         bool delay,
@@ -151,7 +157,7 @@ public sealed class BacktestStreamService(
             .ToListAsync(cancellationToken);
 
         if (bot.IsNySessionOnly)
-            rangeCandles = rangeCandles.Where(IsNySessionCandle).ToList();
+            rangeCandles = rangeCandles.Where(BacktestSimulationEngine.IsNySessionCandle).ToList();
 
         // When NY-session-only, fetch enough prior candles to find 2 that fall within session hours.
         var priorLookback = bot.IsNySessionOnly ? 20 : 2;
@@ -169,7 +175,7 @@ public sealed class BacktestStreamService(
             .ToListAsync(cancellationToken);
 
         var priorCandles = bot.IsNySessionOnly
-            ? priorCandlesRaw.Where(IsNySessionCandle).TakeLast(2).ToList()
+            ? priorCandlesRaw.Where(BacktestSimulationEngine.IsNySessionCandle).TakeLast(2).ToList()
             : priorCandlesRaw;
 
         // [prior0, prior1, range0, range1, ...]
@@ -188,8 +194,7 @@ public sealed class BacktestStreamService(
             .ToListAsync(cancellationToken);
 
         var dailyStats = closedTrades
-            .GroupBy(t => DateOnly.FromDateTime(
-                TimeZoneInfo.ConvertTime(t.ClosedAt!.Value, EasternZone).DateTime))
+            .GroupBy(t => BacktestSimulationEngine.EasternDay(t.ClosedAt!.Value))
             .ToDictionary(
                 g => g.Key,
                 g => (Pnl: g.Sum(t => t.Pnl ?? 0m), Losses: g.Count(t => (t.Pnl ?? 0m) < 0)));
@@ -206,13 +211,15 @@ public sealed class BacktestStreamService(
                      k.OpenTime < combined[startIndex].OpenTime);
         }
 
+        var candlesSinceFlush = 0;
+
         for (var i = startIndex; i < combined.Count; i++)
         {
             var current      = combined[i];
             var previous     = combined[i - 1];
             var secondPrev   = combined[i - 2];
 
-            var context = BuildContext(
+            var context = BacktestSimulationEngine.BuildContext(
                 backtest.Symbol.Code, backtest.Interval.Code,
                 secondPrev, previous, current);
 
@@ -223,21 +230,13 @@ public sealed class BacktestStreamService(
             // Check SL/TP on any open trade before evaluating signals.
             if (openTrade is not null)
             {
-                var (closeReason, closePrice) = CheckSlTp(openTrade, current);
+                var (closeReason, closePrice) = BacktestSimulationEngine.CheckSlTp(openTrade, current);
                 if (closeReason.HasValue)
                 {
-                    CloseTrade(openTrade, closePrice!.Value, closeReason.Value, current.OpenTime, ref balance);
+                    BacktestSimulationEngine.CloseTrade(openTrade, closePrice!.Value, closeReason.Value, current.OpenTime, ref balance);
                     await dbContext.SaveChangesAsync(cancellationToken);
 
-                    // Update daily stats for the newly closed trade.
-                    var closeDay = DateOnly.FromDateTime(
-                        TimeZoneInfo.ConvertTime(openTrade.ClosedAt!.Value, EasternZone).DateTime);
-                    if (!dailyStats.TryGetValue(closeDay, out var stats))
-                        stats = (0m, 0);
-                    dailyStats[closeDay] = (
-                        stats.Pnl + (openTrade.Pnl ?? 0m),
-                        stats.Losses + ((openTrade.Pnl ?? 0m) < 0 ? 1 : 0));
-
+                    ApplyDailyStat(dailyStats, openTrade);
                     openTrade = null;
                     openTradeCandles = 0;
                 }
@@ -248,17 +247,10 @@ public sealed class BacktestStreamService(
                 bot.MaxCandlesPerTrade.HasValue &&
                 openTradeCandles >= bot.MaxCandlesPerTrade.Value)
             {
-                CloseTrade(openTrade, current.Close, TradeCloseReason.Manual, current.OpenTime, ref balance);
+                BacktestSimulationEngine.CloseTrade(openTrade, current.Close, TradeCloseReason.Manual, current.OpenTime, ref balance);
                 await dbContext.SaveChangesAsync(cancellationToken);
 
-                var closeDay = DateOnly.FromDateTime(
-                    TimeZoneInfo.ConvertTime(openTrade.ClosedAt!.Value, EasternZone).DateTime);
-                if (!dailyStats.TryGetValue(closeDay, out var dayStats))
-                    dayStats = (0m, 0);
-                dailyStats[closeDay] = (
-                    dayStats.Pnl + (openTrade.Pnl ?? 0m),
-                    dayStats.Losses + ((openTrade.Pnl ?? 0m) < 0 ? 1 : 0));
-
+                ApplyDailyStat(dailyStats, openTrade);
                 openTrade = null;
                 openTradeCandles = 0;
             }
@@ -266,7 +258,7 @@ public sealed class BacktestStreamService(
             // Check breakeven trigger on the surviving open trade.
             if (openTrade is not null && bot.Breakeven.HasValue && openTrade.StopLoss != 0)
             {
-                var breakevenTriggered = CheckBreakeven(openTrade, current, bot.Breakeven.Value);
+                var breakevenTriggered = BacktestSimulationEngine.CheckBreakeven(openTrade, current, bot.Breakeven.Value);
                 if (breakevenTriggered)
                 {
                     openTrade.StopLoss = bot.BreakevenStop.HasValue ? -bot.BreakevenStop.Value : 0m;
@@ -290,7 +282,7 @@ public sealed class BacktestStreamService(
             }
 
             // Evaluate entry signal when flat.
-            if (openTrade is null && CanEnterToday(bot, current.OpenTime, dailyStats))
+            if (openTrade is null && BacktestSimulationEngine.CanEnterToday(bot, current.OpenTime, dailyStats))
             {
                 TradeSide? side = null;
 
@@ -322,6 +314,7 @@ public sealed class BacktestStreamService(
                         StatusId         = (int)TradeStatus.Active,
                         CreatedAt        = current.OpenTime,
                         OpenedAt         = current.OpenTime,
+                        Fee              = bot.Fee,
                         TradingAccountId = null,
                         BacktestId       = backtest.Id
                     };
@@ -341,77 +334,55 @@ public sealed class BacktestStreamService(
                 JsonOptions);
             await clientSocket.SendAsync(payload, WebSocketMessageType.Text, endOfMessage: true, cancellationToken);
 
-            // Persist incremental progress so REST endpoints reflect current state.
+            // Track incremental progress in memory; flush periodically so REST endpoints reflect
+            // current state without a DB round-trip on every single candle.
             backtest.CandleCount++;
             backtest.FinalBalance = balance;
             backtest.Pnl = balance - backtest.InitialBalance;
-            await dbContext.SaveChangesAsync(cancellationToken);
+
+            if (++candlesSinceFlush >= ProgressFlushEvery)
+            {
+                await dbContext.SaveChangesAsync(cancellationToken);
+                candlesSinceFlush = 0;
+            }
         }
 
         // Force-close any open trade at the final candle's close price.
         if (openTrade is not null && rangeCandles.Count > 0)
         {
             var last = rangeCandles[^1];
-            CloseTrade(openTrade, last.Close, TradeCloseReason.Manual, last.CloseTime, ref balance);
+            BacktestSimulationEngine.CloseTrade(openTrade, last.Close, TradeCloseReason.Manual, last.CloseTime, ref balance);
             backtest.FinalBalance = balance;
             backtest.Pnl = balance - backtest.InitialBalance;
-            await dbContext.SaveChangesAsync(cancellationToken);
         }
+
+        // Final flush of any progress accumulated since the last batch.
+        await dbContext.SaveChangesAsync(cancellationToken);
     }
 
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 
-    private async Task DisableLinkedTradeBotAsync(long backtestId)
+    private static void ApplyDailyStat(
+        Dictionary<DateOnly, (decimal Pnl, int Losses)> dailyStats,
+        Trade closedTrade)
+    {
+        var closeDay = BacktestSimulationEngine.EasternDay(closedTrade.ClosedAt!.Value);
+        if (!dailyStats.TryGetValue(closeDay, out var stats))
+            stats = (0m, 0);
+        dailyStats[closeDay] = (
+            stats.Pnl + (closedTrade.Pnl ?? 0m),
+            stats.Losses + ((closedTrade.Pnl ?? 0m) < 0 ? 1 : 0));
+    }
+
+    private static async Task DisableLinkedTradeBotAsync(ApplicationDbContext dbContext, long backtestId)
     {
         await dbContext.TradeBots
             .Where(b => b.BacktestId == backtestId)
             .ExecuteUpdateAsync(
                 s => s.SetProperty(b => b.IsEnabled, false),
                 CancellationToken.None);
-    }
-
-    private static bool IsNySessionCandle(KlineData k)
-    {
-        var eastern = TimeZoneInfo.ConvertTime(k.OpenTime, EasternZone);
-        if (eastern.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
-            return false;
-        var tod = TimeOnly.FromDateTime(eastern.DateTime);
-        return tod >= NyOpen && tod < NyClose;
-    }
-
-    private static bool CanEnterToday(
-        TradeBot bot,
-        DateTimeOffset candleTime,
-        Dictionary<DateOnly, (decimal Pnl, int Losses)> dailyStats)
-    {
-        var easternTime = TimeZoneInfo.ConvertTime(candleTime, EasternZone);
-
-        if (bot.IsNySessionOnly)
-        {
-            var dow = easternTime.DayOfWeek;
-            if (dow == DayOfWeek.Saturday || dow == DayOfWeek.Sunday)
-                return false;
-
-            var tod = TimeOnly.FromDateTime(easternTime.DateTime);
-            if (tod < NyOpen || tod >= NyClose)
-                return false;
-        }
-
-        if (bot.DailyProfitGoal.HasValue || bot.MaxLossesPerDay.HasValue)
-        {
-            var day = DateOnly.FromDateTime(easternTime.DateTime);
-            dailyStats.TryGetValue(day, out var stats);
-
-            if (bot.DailyProfitGoal.HasValue && stats.Pnl >= bot.DailyProfitGoal.Value)
-                return false;
-
-            if (bot.MaxLossesPerDay.HasValue && stats.Losses >= bot.MaxLossesPerDay.Value)
-                return false;
-        }
-
-        return true;
     }
 
     private async Task<TradeSide?> DecideViaMlAsync(
@@ -452,98 +423,15 @@ public sealed class BacktestStreamService(
         };
     }
 
-    private ITradingRule? SelectRule(int strategyId) => strategyId switch
+    private ITradingRule? SelectRule(int strategyId) => (TradingStrategy)strategyId switch
     {
-        1 => smaTradingRule,
-        2 => rsiTradingRule,
-        3 => macdTradingRule,
-        4 => smaMacdTradingRule,
-        5 => null, // MlPolicy: handled by mlConnector in the simulation loop
+        TradingStrategy.Sma      => smaTradingRule,
+        TradingStrategy.Rsi      => rsiTradingRule,
+        TradingStrategy.Macd     => macdTradingRule,
+        TradingStrategy.SmaMacd  => smaMacdTradingRule,
+        TradingStrategy.MlPolicy => null, // handled by mlConnector in the simulation loop
         _ => throw new ArgumentException($"Unknown strategy id {strategyId}.")
     };
-
-    private static TradingRuleContext BuildContext(
-        string symbolCode,
-        string intervalCode,
-        KlineData secondPrevious,
-        KlineData previous,
-        KlineData current) =>
-        new(
-            SymbolCode:          symbolCode,
-            IntervalCode:        intervalCode,
-            CurrentOpen:         current.Open,
-            CurrentHigh:         current.High,
-            CurrentLow:          current.Low,
-            CurrentClose:        current.Close,
-            PreviousClose:       previous.Close,
-            SecondPreviousClose: secondPrevious.Close,
-            CurrentSma20:        current.SimpleMovingAverage?.Sma20,
-            CurrentSma100:       current.SimpleMovingAverage?.Sma100,
-            PreviousSma20:       previous.SimpleMovingAverage?.Sma20,
-            PreviousSma100:      previous.SimpleMovingAverage?.Sma100,
-            SecondPreviousSma20: secondPrevious.SimpleMovingAverage?.Sma20,
-            CurrentRsi:          current.RelativeStrengthIndex?.Rsi,
-            CurrentRsiSmooth:    current.RelativeStrengthIndex?.RsiSmooth,
-            PreviousRsi:         previous.RelativeStrengthIndex?.Rsi,
-            PreviousRsiSmooth:   previous.RelativeStrengthIndex?.RsiSmooth,
-            CurrentMacdLine:     current.Macd?.MacdLine,
-            CurrentSignalLine:   current.Macd?.SignalLine,
-            CurrentHistogram:    current.Macd?.Histogram,
-            PreviousHistogram:   previous.Macd?.Histogram);
-
-    private static bool CheckBreakeven(Trade trade, KlineData candle, decimal breakevenThreshold)
-    {
-        var entry  = trade.EntryPrice!.Value;
-        var isBuy  = trade.SideId == (int)TradeSide.Buy;
-        var peakPnl = isBuy
-            ? (candle.High - entry) * trade.Quantity
-            : (entry - candle.Low)  * trade.Quantity;
-
-        return peakPnl >= breakevenThreshold;
-    }
-
-    private static (TradeCloseReason? Reason, decimal? Price) CheckSlTp(Trade trade, KlineData candle)
-    {
-        var entry = trade.EntryPrice!.Value;
-        var isBuy = trade.SideId == (int)TradeSide.Buy;
-
-        // SL takes priority when both are hit intra-candle (conservative).
-        if (trade.StopLoss.HasValue)
-        {
-            var slPrice = isBuy ? entry - trade.StopLoss.Value : entry + trade.StopLoss.Value;
-            if (isBuy ? candle.Low <= slPrice : candle.High >= slPrice)
-                return (TradeCloseReason.StopLoss, slPrice);
-        }
-
-        if (trade.TakeProfit.HasValue)
-        {
-            var tpPrice = isBuy ? entry + trade.TakeProfit.Value : entry - trade.TakeProfit.Value;
-            if (isBuy ? candle.High >= tpPrice : candle.Low <= tpPrice)
-                return (TradeCloseReason.TakeProfit, tpPrice);
-        }
-
-        return (null, null);
-    }
-
-    private static void CloseTrade(
-        Trade trade,
-        decimal closePrice,
-        TradeCloseReason reason,
-        DateTimeOffset time,
-        ref decimal balance)
-    {
-        trade.StatusId      = (int)TradeStatus.Closed;
-        trade.ClosedAt      = time;
-        trade.ClosedPrice   = closePrice;
-        trade.CloseReasonId = (int)reason;
-        var rawPnl = trade.SideId == (int)TradeSide.Buy
-            ? (closePrice - trade.EntryPrice!.Value) * trade.Quantity
-            : (trade.EntryPrice!.Value - closePrice) * trade.Quantity;
-
-        trade.Pnl       = rawPnl - trade.Fee;
-        balance        += trade.Pnl.Value;
-        trade.AccountPnl = balance;
-    }
 
     private static CandleWithIndicatorsResponseDto ToDto(KlineData k) =>
         new(

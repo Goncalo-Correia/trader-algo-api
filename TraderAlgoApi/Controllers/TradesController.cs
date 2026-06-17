@@ -13,41 +13,22 @@ public sealed class TradesController(ITradeService tradeService) : ControllerBas
         [FromBody] CreateTradeRequestDto request,
         CancellationToken cancellationToken)
     {
-        try
-        {
-            var trade = await tradeService.CreateAsync(request, cancellationToken);
-            return CreatedAtAction(nameof(GetActive), new { tradingAccountId = trade.TradingAccountId ?? 0 }, trade);
-        }
-        catch (ArgumentException ex)      { return BadRequest(ex.Message); }
-        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+        var trade = await tradeService.CreateAsync(request, cancellationToken);
+        return CreatedAtAction(nameof(GetActive), new { tradingAccountId = trade.TradingAccountId ?? 0 }, trade);
     }
 
     [HttpPost("{id:long}/stop")]
     public async Task<ActionResult<TradeResponseDto>> Stop(
         long id,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            return Ok(await tradeService.StopAsync(id, cancellationToken));
-        }
-        catch (KeyNotFoundException ex)      { return NotFound(ex.Message); }
-        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
-    }
+        CancellationToken cancellationToken) =>
+        Ok(await tradeService.StopAsync(id, cancellationToken));
 
     [HttpPatch("{id:long}")]
     public async Task<ActionResult<TradeResponseDto>> Update(
         long id,
         [FromBody] UpdateTradeRequestDto request,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            return Ok(await tradeService.UpdateAsync(id, request, cancellationToken));
-        }
-        catch (KeyNotFoundException ex)      { return NotFound(ex.Message); }
-        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
-    }
+        CancellationToken cancellationToken) =>
+        Ok(await tradeService.UpdateAsync(id, request, cancellationToken));
 
     [HttpGet("account/{tradingAccountId:long}/active")]
     public async Task<ActionResult<IReadOnlyList<TradeResponseDto>>> GetActive(

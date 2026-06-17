@@ -33,7 +33,6 @@ public sealed record BacktestDetailResponseDto(
     [property: JsonPropertyName("maxDrawdown")]           decimal? MaxDrawdown,
     [property: JsonPropertyName("maxTrailingDrawdown")]   decimal? MaxTrailingDrawdown,
     [property: JsonPropertyName("trades")]                IReadOnlyList<TradeResponseDto> Trades,
-    [property: JsonPropertyName("candles")]               IReadOnlyList<CandleWithIndicatorsResponseDto> Candles,
     [property: JsonPropertyName("equityCurve")]           IReadOnlyList<EquityPointDto> EquityCurve);
 
 public sealed record EquityPointDto(

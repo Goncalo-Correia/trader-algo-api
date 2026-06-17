@@ -42,6 +42,18 @@ public sealed class Backtest
     [ForeignKey(nameof(StatusId))]
     public BacktestStatus Status { get; set; } = null!;
 
+    /// <summary>
+    /// Strongly-typed view over <see cref="StatusId"/>. The lookup-table IDs match the enum values,
+    /// so this is the one place the int↔enum mapping lives — prefer it over raw casts in C# code.
+    /// Not mapped: persistence still goes through <see cref="StatusId"/>. Not usable in EF LINQ queries.
+    /// </summary>
+    [NotMapped]
+    public Enums.BacktestStatus StatusEnum
+    {
+        get => (Enums.BacktestStatus)StatusId;
+        set => StatusId = (int)value;
+    }
+
     [Precision(28, 10)]
     public decimal InitialBalance { get; set; }
 
