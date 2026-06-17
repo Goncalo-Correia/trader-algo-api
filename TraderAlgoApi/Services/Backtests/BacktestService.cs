@@ -1,7 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
 using TraderAlgoApi.Dtos.Backtests;
-using TraderAlgoApi.Dtos.Charts;
 using TraderAlgoApi.Dtos.Trades;
 using TraderAlgoApi.Models;
 using TraderAlgoApi.Models.Enums;
@@ -42,6 +41,11 @@ public sealed class BacktestService(
                 $"Strategy {tradingStrategyId} not found.");
 
         var now = timeProvider.GetUtcNow();
+
+        // Backtest + its template TradeBot are created as a unit — wrap them in a transaction so a
+        // failure between the saves can't leave a backtest without its bot (or vice versa).
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+
         var backtest = new Backtest
         {
             SymbolId   = symbol.Id,
@@ -68,6 +72,8 @@ public sealed class BacktestService(
             StopLoss           = stopLoss,
             TakeProfit         = takeProfit,
             Breakeven          = request.Breakeven,
+            BreakevenStop      = request.BreakevenStop,
+            Fee                = request.Fee,
             IsNySessionOnly    = request.IsNySessionOnly,
             DailyProfitGoal    = request.DailyProfitGoal,
             MaxLossesPerDay    = request.MaxLossesPerDay,
@@ -84,24 +90,41 @@ public sealed class BacktestService(
         tradeBot.TradingStrategy = strategy;
         await dbContext.SaveChangesAsync(cancellationToken);
 
-        return ToSummaryDto(backtest, symbol, interval, 0);
+        await transaction.CommitAsync(cancellationToken);
+
+        return ToSummaryDto(backtest, symbol.Code, interval.Code, strategy.Name, tradeBot, tradeCount: 0,
+            closedTrades: []);
     }
 
     public async Task<IReadOnlyList<BacktestSummaryResponseDto>> GetAllAsync(
         CancellationToken cancellationToken = default)
     {
-        var backtests = await dbContext.Backtests
+        // Project to a lightweight shape: the summary only needs each trade's ClosedAt + Pnl to
+        // build the equity curve / drawdowns, so we avoid loading full Trade graphs for every backtest.
+        var rows = await dbContext.Backtests
             .AsNoTracking()
-            .Include(b => b.Symbol)
-            .Include(b => b.Interval)
-            .Include(b => b.TradeBot)
-                .ThenInclude(tb => tb!.TradingStrategy)
-            .Include(b => b.Trades)
             .OrderByDescending(b => b.StartedAt)
+            .Select(b => new
+            {
+                Backtest     = b,
+                SymbolCode   = b.Symbol.Code,
+                IntervalCode = b.Interval.Code,
+                StrategyName = b.TradeBot != null && b.TradeBot.TradingStrategy != null
+                    ? b.TradeBot.TradingStrategy.Name
+                    : string.Empty,
+                Bot          = b.TradeBot,
+                TradeCount   = b.Trades.Count,
+                ClosedTrades = b.Trades
+                    .Where(t => t.Pnl != null && t.ClosedAt != null)
+                    .Select(t => new { t.ClosedAt, t.Pnl })
+                    .ToList()
+            })
             .ToListAsync(cancellationToken);
 
-        return backtests
-            .Select(b => ToSummaryDto(b, b.Symbol, b.Interval, b.Trades.Count))
+        return rows
+            .Select(r => ToSummaryDto(
+                r.Backtest, r.SymbolCode, r.IntervalCode, r.StrategyName, r.Bot, r.TradeCount,
+                r.ClosedTrades.Select(c => (c.ClosedAt, c.Pnl))))
             .ToList();
     }
 
@@ -122,63 +145,48 @@ public sealed class BacktestService(
             .FirstOrDefaultAsync(b => b.Id == id, cancellationToken)
             ?? throw new KeyNotFoundException($"Backtest {id} not found.");
 
-        var candles = await dbContext.KlineData
-            .AsNoTracking()
-            .Where(k => k.SymbolId == backtest.SymbolId &&
-                        k.IntervalId == backtest.IntervalId &&
-                        k.OpenTime >= backtest.From &&
-                        k.OpenTime <= backtest.To)
-            .Include(k => k.SimpleMovingAverage)
-            .Include(k => k.RelativeStrengthIndex)
-            .Include(k => k.Macd)
-            .OrderBy(k => k.OpenTime)
-            .Select(k => new CandleWithIndicatorsResponseDto(
-                k.OpenTime.ToUnixTimeSeconds(),
-                k.Open, k.High, k.Low, k.Close, k.Volume,
-                k.TakerBuyBaseAssetVolume,
-                k.Volume - k.TakerBuyBaseAssetVolume,
-                k.SimpleMovingAverage!.Sma20,
-                k.SimpleMovingAverage!.Sma100,
-                k.RelativeStrengthIndex!.Rsi,
-                k.RelativeStrengthIndex!.RsiSmooth,
-                k.RelativeStrengthIndex!.Divergence,
-                k.Macd!.MacdLine,
-                k.Macd!.SignalLine,
-                k.Macd!.Histogram))
-            .ToListAsync(cancellationToken);
-
         var tradeDtos = backtest.Trades
             .OrderBy(t => t.OpenedAt)
-            .Select(TradeToDto)
+            .Select(t => TradeToDto(t, t.AccountPnl))
             .ToList();
 
-        var equity = BuildEquityCurve(backtest);
+        var equity = BacktestSimulationEngine.BuildEquityCurve(
+            backtest.InitialBalance,
+            backtest.From.ToUnixTimeSeconds(),
+            backtest.Trades.Select(t => (t.ClosedAt, t.Pnl)));
+        var (maxDrawdown, maxTrailingDrawdown) =
+            BacktestSimulationEngine.ComputeDrawdowns(equity, backtest.InitialBalance);
+
+        var bot = backtest.TradeBot;
 
         return new BacktestDetailResponseDto(
             Id:             backtest.Id,
             TradeBotId:     backtest.TradeBotId,
             SymbolCode:     backtest.Symbol.Code,
             IntervalCode:   backtest.Interval.Code,
-            StrategyName:   backtest.TradeBot?.TradingStrategy?.Name ?? string.Empty,
+            StrategyName:   bot?.TradingStrategy?.Name ?? string.Empty,
             From:           backtest.From.ToUnixTimeSeconds(),
             To:             backtest.To.ToUnixTimeSeconds(),
             StartedAt:      backtest.StartedAt.ToUnixTimeMilliseconds(),
             CompletedAt:    backtest.CompletedAt?.ToUnixTimeMilliseconds(),
-            Status:         (BacktestStatus)backtest.StatusId,
+            Status:         backtest.StatusEnum,
             InitialBalance: backtest.InitialBalance,
             FinalBalance:   backtest.FinalBalance,
             Pnl:            backtest.Pnl,
-            Quantity:       backtest.TradeBot?.Quantity ?? 0,
-            StopLoss:       backtest.TradeBot?.StopLoss,
-            TakeProfit:     backtest.TradeBot?.TakeProfit,
-            Breakeven:      backtest.TradeBot?.Breakeven,
-            IsNySessionOnly: backtest.TradeBot?.IsNySessionOnly ?? false,
-            DailyProfitGoal: backtest.TradeBot?.DailyProfitGoal,
-            MaxLossesPerDay: backtest.TradeBot?.MaxLossesPerDay,
-            MaxCandlesPerTrade: backtest.TradeBot?.MaxCandlesPerTrade,
+            Quantity:       bot?.Quantity ?? 0,
+            StopLoss:       bot?.StopLoss,
+            TakeProfit:     bot?.TakeProfit,
+            Breakeven:      bot?.Breakeven,
+            BreakevenStop:  bot?.BreakevenStop,
+            IsNySessionOnly: bot?.IsNySessionOnly ?? false,
+            Delay:          bot?.Delay ?? false,
+            DailyProfitGoal: bot?.DailyProfitGoal,
+            MaxLossesPerDay: bot?.MaxLossesPerDay,
+            MaxCandlesPerTrade: bot?.MaxCandlesPerTrade,
             CandleCount:    backtest.CandleCount,
+            MaxDrawdown:    maxDrawdown,
+            MaxTrailingDrawdown: maxTrailingDrawdown,
             Trades:         tradeDtos,
-            Candles:        candles,
             EquityCurve:    equity);
     }
 
@@ -189,6 +197,10 @@ public sealed class BacktestService(
 
         if (!exists)
             throw new KeyNotFoundException($"Backtest {id} not found.");
+
+        // Three dependent deletes — run them in one transaction so a mid-sequence failure can't
+        // leave orphaned trades or bots behind.
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
 
         await dbContext.Trades
             .Where(t => t.BacktestId == id)
@@ -201,6 +213,8 @@ public sealed class BacktestService(
         await dbContext.Backtests
             .Where(b => b.Id == id)
             .ExecuteDeleteAsync(cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
     }
 
     // -------------------------------------------------------------------------
@@ -235,75 +249,71 @@ public sealed class BacktestService(
                 "Provide tradingStrategy and quantity, or enable an account tradebot to use as the backtest template.");
     }
 
-    private static IReadOnlyList<EquityPointDto> BuildEquityCurve(Backtest backtest)
-    {
-        var points = new List<EquityPointDto>
-        {
-            new(backtest.From.ToUnixTimeSeconds(), backtest.InitialBalance)
-        };
-
-        var balance = backtest.InitialBalance;
-
-        foreach (var trade in backtest.Trades.Where(t => t.Pnl.HasValue).OrderBy(t => t.ClosedAt))
-        {
-            balance += trade.Pnl!.Value;
-            points.Add(new EquityPointDto(
-                trade.ClosedAt!.Value.ToUnixTimeSeconds(),
-                balance));
-        }
-
-        return points;
-    }
-
     private static BacktestSummaryResponseDto ToSummaryDto(
         Backtest b,
-        Symbol symbol,
-        Interval interval,
-        int tradeCount) =>
-        new(
+        string symbolCode,
+        string intervalCode,
+        string strategyName,
+        TradeBot? bot,
+        int tradeCount,
+        IEnumerable<(DateTimeOffset? ClosedAt, decimal? Pnl)> closedTrades)
+    {
+        var equity = BacktestSimulationEngine.BuildEquityCurve(
+            b.InitialBalance, b.From.ToUnixTimeSeconds(), closedTrades);
+        var (maxDrawdown, maxTrailingDrawdown) =
+            BacktestSimulationEngine.ComputeDrawdowns(equity, b.InitialBalance);
+
+        return new(
             Id:             b.Id,
             TradeBotId:     b.TradeBotId,
-            SymbolCode:     symbol.Code,
-            IntervalCode:   interval.Code,
-            StrategyName:   b.TradeBot?.TradingStrategy?.Name ?? string.Empty,
+            SymbolCode:     symbolCode,
+            IntervalCode:   intervalCode,
+            StrategyName:   strategyName,
             From:           b.From.ToUnixTimeSeconds(),
             To:             b.To.ToUnixTimeSeconds(),
             StartedAt:      b.StartedAt.ToUnixTimeMilliseconds(),
             CompletedAt:    b.CompletedAt?.ToUnixTimeMilliseconds(),
-            Status:         (BacktestStatus)b.StatusId,
+            Status:         b.StatusEnum,
             InitialBalance: b.InitialBalance,
             FinalBalance:   b.FinalBalance,
             Pnl:            b.Pnl,
-            Quantity:       b.TradeBot?.Quantity ?? 0,
-            StopLoss:       b.TradeBot?.StopLoss,
-            TakeProfit:     b.TradeBot?.TakeProfit,
-            Breakeven:      b.TradeBot?.Breakeven,
-            IsNySessionOnly: b.TradeBot?.IsNySessionOnly ?? false,
-            DailyProfitGoal: b.TradeBot?.DailyProfitGoal,
-            MaxLossesPerDay: b.TradeBot?.MaxLossesPerDay,
-            MaxCandlesPerTrade: b.TradeBot?.MaxCandlesPerTrade,
+            Quantity:       bot?.Quantity ?? 0,
+            StopLoss:       bot?.StopLoss,
+            TakeProfit:     bot?.TakeProfit,
+            Breakeven:      bot?.Breakeven,
+            BreakevenStop:  bot?.BreakevenStop,
+            IsNySessionOnly: bot?.IsNySessionOnly ?? false,
+            Delay:          bot?.Delay ?? false,
+            DailyProfitGoal: bot?.DailyProfitGoal,
+            MaxLossesPerDay: bot?.MaxLossesPerDay,
+            MaxCandlesPerTrade: bot?.MaxCandlesPerTrade,
             CandleCount:    b.CandleCount,
-            TradeCount:     tradeCount);
+            TradeCount:     tradeCount,
+            MaxDrawdown:    maxDrawdown,
+            MaxTrailingDrawdown: maxTrailingDrawdown);
+    }
 
-    private static TradeResponseDto TradeToDto(Trade t) =>
+    private static TradeResponseDto TradeToDto(Trade t, decimal? accountPnl = null) =>
         new(
             Id:               t.Id,
             SymbolCode:       t.Symbol?.Code ?? string.Empty,
             IntervalCode:     t.Interval?.Code,
-            Side:             (TradeSide)t.SideId,
-            OrderType:        (TradeOrderType)t.OrderTypeId,
+            Side:             t.SideEnum,
+            OrderType:        t.OrderTypeEnum,
             Quantity:         t.Quantity,
             RequestedPrice:   t.RequestedPrice,
             EntryPrice:       t.EntryPrice,
             StopLoss:         t.StopLoss,
             TakeProfit:       t.TakeProfit,
-            Status:           (TradeStatus)t.StatusId,
+            Status:           t.StatusEnum,
             CreatedAt:        t.CreatedAt.ToUnixTimeMilliseconds(),
             OpenedAt:         t.OpenedAt?.ToUnixTimeMilliseconds(),
             ClosedAt:         t.ClosedAt?.ToUnixTimeMilliseconds(),
             ClosedPrice:      t.ClosedPrice,
-            CloseReason:      t.CloseReasonId is int id ? (TradeCloseReason)id : null,
+            CloseReason:      t.CloseReasonEnum,
+            Fee:              t.Fee,
             Pnl:              t.Pnl,
+            AccountPnl:       accountPnl,
             UnrealizedPnl:    null,
             TradingAccountId: t.TradingAccountId,
             BacktestId:       t.BacktestId);

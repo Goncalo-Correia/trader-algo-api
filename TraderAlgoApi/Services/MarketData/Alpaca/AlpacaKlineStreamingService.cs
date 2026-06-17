@@ -26,6 +26,7 @@ public sealed class AlpacaKlineStreamingService(
     ClosedCandleFeed                     closedCandleFeed,
     CandleAggregator                     candleAggregator,
     NyseSessionService                   nyseSession,
+    TimeProvider                         timeProvider,
     ILogger<AlpacaKlineStreamingService> logger) : BackgroundService
 {
     private const string DefaultWsBaseUrl = "wss://stream.data.alpaca.markets";
@@ -56,11 +57,12 @@ public sealed class AlpacaKlineStreamingService(
         while (!stoppingToken.IsCancellationRequested)
         {
             // Outside market hours: sleep until the next open.
-            var nextOpen = nyseSession.NextMarketOpen(DateTimeOffset.UtcNow);
-            if (nextOpen > DateTimeOffset.UtcNow.AddSeconds(30))
+            var now = timeProvider.GetUtcNow();
+            var nextOpen = nyseSession.NextMarketOpen(now);
+            if (nextOpen > now.AddSeconds(30))
             {
                 logger.LogInformation("Market closed. Alpaca stream reconnects at {NextOpen:u}", nextOpen);
-                try { await Task.Delay(nextOpen - DateTimeOffset.UtcNow, stoppingToken); }
+                try { await Task.Delay(nextOpen - now, timeProvider, stoppingToken); }
                 catch (OperationCanceledException) { return; }
             }
 
@@ -202,7 +204,7 @@ public sealed class AlpacaKlineStreamingService(
                 NumberOfTrades          = trades,
                 TakerBuyBaseAssetVolume  = 0m,
                 TakerBuyQuoteAssetVolume = 0m,
-                CreatedAt               = DateTimeOffset.UtcNow,
+                CreatedAt               = timeProvider.GetUtcNow(),
             });
         }
         else

@@ -33,10 +33,11 @@ internal static class WebSocketEndpoints
         app.MapGet("/ws/charts/backtest", async (
             HttpContext context,
             long backtestId,
+            bool delay,
             IBacktestStreamService backtestStreamService,
             CancellationToken cancellationToken) =>
         {
-            await backtestStreamService.StreamAsync(context, backtestId, cancellationToken);
+            await backtestStreamService.StreamAsync(context, backtestId, delay, cancellationToken);
         })
         .ExcludeFromDescription();
 

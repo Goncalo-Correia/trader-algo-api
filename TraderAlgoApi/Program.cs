@@ -1,14 +1,14 @@
 using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using TraderAlgoApi.Data;
+using TraderAlgoApi.Infrastructure;
 using TraderAlgoApi.Services.Backtests;
-using TraderAlgoApi.Services.Binance;
 using TraderAlgoApi.Services.Charts;
 using TraderAlgoApi.Services.DataCollector;
 using TraderAlgoApi.Services.Indicators;
 using TraderAlgoApi.Services.Kronos;
 using TraderAlgoApi.Services.MarketData;
-using TraderAlgoApi.Services.MarketData.Alpaca;
 using TraderAlgoApi.Services.Ml;
 using TraderAlgoApi.Services.PriceFeeds;
 using TraderAlgoApi.Services.Session;
@@ -32,6 +32,11 @@ builder.Services.AddControllers()
     .AddJsonOptions(options =>
         options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddSwaggerGen();
+
+// Centralized RFC 7807 error responses for everything not explicitly handled in a controller.
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy(LocalDevelopmentCorsPolicy, policy =>
@@ -42,9 +47,19 @@ builder.Services.AddCors(options =>
             .AllowAnyMethod();
     });
 });
-builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("Supabase")));
+
+// Register both a scoped DbContext (for controllers/services) and a factory (for long-lived
+// WebSocket streams and background work that must not hold a request-scoped context open).
+var connectionString = builder.Configuration.GetConnectionString("Supabase");
+void ConfigureDb(DbContextOptionsBuilder options) => options.UseNpgsql(connectionString);
+builder.Services.AddDbContext<ApplicationDbContext>(ConfigureDb);
+builder.Services.AddDbContextFactory<ApplicationDbContext>(ConfigureDb);
+
 builder.Services.AddSingleton(TimeProvider.System);
+
+// ── Health checks ───────────────────────────────────────────────────────────────
+builder.Services.AddHealthChecks()
+    .AddCheck<DatabaseHealthCheck>("database");
 
 // ── Session / calendar ────────────────────────────────────────────────────────
 builder.Services.AddSingleton<NyseSessionService>();
@@ -92,40 +107,8 @@ builder.Services.AddHostedService<DataCollectorTimer>();
 // ── Live charts ───────────────────────────────────────────────────────────────
 builder.Services.AddScoped<ILiveChartDataService, LiveChartDataService>();
 
-// ── Binance ───────────────────────────────────────────────────────────────────
-builder.Services.AddHttpClient("Binance", client =>
-{
-    var baseUrl = builder.Configuration["Binance:BaseUrl"] ?? "https://api.binance.com";
-    client.BaseAddress = new Uri(baseUrl);
-    client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
-});
-// BinanceMarketDataService implements both IBinanceMarketDataService and IMarketDataProvider.
-builder.Services.AddScoped<BinanceMarketDataService>();
-builder.Services.AddScoped<IBinanceMarketDataService>(sp => sp.GetRequiredService<BinanceMarketDataService>());
-builder.Services.AddHostedService<BinanceKlineStreamingService>();
-
-// ── Alpaca ────────────────────────────────────────────────────────────────────
-builder.Services.AddHttpClient("Alpaca", client =>
-{
-    var baseUrl = builder.Configuration["Alpaca:BaseUrl"] ?? "https://data.alpaca.markets";
-    client.BaseAddress = new Uri(baseUrl);
-    client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
-    var apiKey    = builder.Configuration["Alpaca:ApiKey"]    ?? string.Empty;
-    var secretKey = builder.Configuration["Alpaca:SecretKey"] ?? string.Empty;
-    client.DefaultRequestHeaders.Add("APCA-API-KEY-ID",     apiKey);
-    client.DefaultRequestHeaders.Add("APCA-API-SECRET-KEY", secretKey);
-});
-builder.Services.AddScoped<AlpacaMarketDataProvider>();
-builder.Services.AddHostedService<AlpacaKlineStreamingService>();
-builder.Services.AddHostedService<AlpacaRestPollingService>();
-
-// ── Provider factory (resolves IMarketDataProvider per symbol) ────────────────
-// BinanceMarketDataService (scoped) is injected as IMarketDataProvider via the factory.
-builder.Services.AddScoped<IMarketDataProvider>(sp => sp.GetRequiredService<BinanceMarketDataService>());
-builder.Services.AddScoped<IMarketDataProviderFactory>(sp =>
-    new MarketDataProviderFactory(
-        sp.GetRequiredService<BinanceMarketDataService>(),
-        sp.GetRequiredService<AlpacaMarketDataProvider>()));
+// ── Market data providers (Binance + Alpaca + factory + streaming services) ────
+builder.Services.AddMarketDataProviders(builder.Configuration);
 
 // ── Kronos ────────────────────────────────────────────────────────────────────
 builder.Services.AddHttpClient("Kronos", client =>
@@ -150,6 +133,14 @@ builder.Services.AddScoped<IMlConnectorService, MlConnectorService>();
 
 var app = builder.Build();
 
+// In development the schema churns between runs; clear Npgsql's prepared-statement cache so
+// stale plans from before the latest migration don't cause column-count mismatches on startup.
+// Not needed (and undesirable) in production, where the schema is stable.
+if (app.Environment.IsDevelopment())
+    NpgsqlConnection.ClearAllPools();
+
+app.UseExceptionHandler();
+
 app.UseWebSockets();
 
 if (app.Environment.IsDevelopment())
@@ -168,5 +159,6 @@ app.UseCors(LocalDevelopmentCorsPolicy);
 app.UseAuthorization();
 app.MapWebSocketEndpoints();
 app.MapControllers();
+app.MapHealthChecks("/health");
 
 app.Run();

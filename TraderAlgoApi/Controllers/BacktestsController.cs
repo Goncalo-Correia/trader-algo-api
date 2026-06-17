@@ -11,43 +11,24 @@ public sealed class BacktestsController(IBacktestService backtestService) : Cont
     [HttpPost]
     public async Task<ActionResult<BacktestSummaryResponseDto>> Create(
         [FromBody] CreateBacktestRequestDto request,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            return Ok(await backtestService.CreateAsync(request, cancellationToken));
-        }
-        catch (ArgumentException ex)       { return BadRequest(ex.Message); }
-        catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
-    }
+        CancellationToken cancellationToken) =>
+        Ok(await backtestService.CreateAsync(request, cancellationToken));
 
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<BacktestSummaryResponseDto>>> GetAll(
-        CancellationToken cancellationToken)
-    {
-        return Ok(await backtestService.GetAllAsync(cancellationToken));
-    }
+        CancellationToken cancellationToken) =>
+        Ok(await backtestService.GetAllAsync(cancellationToken));
 
     [HttpGet("{id:long}")]
     public async Task<ActionResult<BacktestDetailResponseDto>> GetById(
         long id,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            return Ok(await backtestService.GetByIdAsync(id, cancellationToken));
-        }
-        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
-    }
+        CancellationToken cancellationToken) =>
+        Ok(await backtestService.GetByIdAsync(id, cancellationToken));
 
     [HttpDelete("{id:long}")]
     public async Task<IActionResult> Delete(long id, CancellationToken cancellationToken)
     {
-        try
-        {
-            await backtestService.DeleteAsync(id, cancellationToken);
-            return NoContent();
-        }
-        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
+        await backtestService.DeleteAsync(id, cancellationToken);
+        return NoContent();
     }
 }

@@ -13,13 +13,8 @@ public sealed class TradeBotsController(ITradeBotService tradeBotService) : Cont
         [FromBody] CreateTradeBotRequestDto request,
         CancellationToken cancellationToken)
     {
-        try
-        {
-            var tradeBot = await tradeBotService.CreateAsync(request, cancellationToken);
-            return CreatedAtAction(nameof(GetById), new { id = tradeBot.Id }, tradeBot);
-        }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
-        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+        var tradeBot = await tradeBotService.CreateAsync(request, cancellationToken);
+        return CreatedAtAction(nameof(GetById), new { id = tradeBot.Id }, tradeBot);
     }
 
     [HttpGet]
@@ -33,62 +28,32 @@ public sealed class TradeBotsController(ITradeBotService tradeBotService) : Cont
     [HttpGet("{id:long}")]
     public async Task<ActionResult<TradeBotResponseDto>> GetById(
         long id,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            return Ok(await tradeBotService.GetByIdAsync(id, cancellationToken));
-        }
-        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
-    }
+        CancellationToken cancellationToken) =>
+        Ok(await tradeBotService.GetByIdAsync(id, cancellationToken));
 
     [HttpPatch("{id:long}")]
     public async Task<ActionResult<TradeBotResponseDto>> Update(
         long id,
         [FromBody] UpdateTradeBotRequestDto request,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            return Ok(await tradeBotService.UpdateAsync(id, request, cancellationToken));
-        }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
-        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
-    }
+        CancellationToken cancellationToken) =>
+        Ok(await tradeBotService.UpdateAsync(id, request, cancellationToken));
 
     [HttpPost("{id:long}/enable")]
     public async Task<ActionResult<TradeBotResponseDto>> Enable(
         long id,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            return Ok(await tradeBotService.SetEnabledAsync(id, true, cancellationToken));
-        }
-        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
-        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
-    }
+        CancellationToken cancellationToken) =>
+        Ok(await tradeBotService.SetEnabledAsync(id, true, cancellationToken));
 
     [HttpPost("{id:long}/disable")]
     public async Task<ActionResult<TradeBotResponseDto>> Disable(
         long id,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            return Ok(await tradeBotService.SetEnabledAsync(id, false, cancellationToken));
-        }
-        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
-    }
+        CancellationToken cancellationToken) =>
+        Ok(await tradeBotService.SetEnabledAsync(id, false, cancellationToken));
 
     [HttpDelete("{id:long}")]
     public async Task<IActionResult> Delete(long id, CancellationToken cancellationToken)
     {
-        try
-        {
-            await tradeBotService.DeleteAsync(id, cancellationToken);
-            return NoContent();
-        }
-        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
+        await tradeBotService.DeleteAsync(id, cancellationToken);
+        return NoContent();
     }
 }

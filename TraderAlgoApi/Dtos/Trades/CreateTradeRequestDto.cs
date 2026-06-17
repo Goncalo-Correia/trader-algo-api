@@ -14,4 +14,5 @@ public sealed record CreateTradeRequestDto(
     decimal?                  LimitPrice,
     decimal?                  StopLoss,
     decimal?                  TakeProfit,
-    long?                     TradingAccountId);
+    long?                     TradingAccountId,
+    decimal                   Fee = 0);

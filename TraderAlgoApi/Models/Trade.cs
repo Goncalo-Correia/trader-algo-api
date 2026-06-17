@@ -68,6 +68,14 @@ public sealed class Trade
     [Precision(28, 10)]
     public decimal? Pnl { get; set; }
 
+    /// <summary>Running account balance after this trade closed. Null for live trades and while open.</summary>
+    [Precision(28, 10)]
+    public decimal? AccountPnl { get; set; }
+
+    /// <summary>Fee deducted from PnL on close. Defaults to zero.</summary>
+    [Precision(28, 10)]
+    public decimal Fee { get; set; }
+
     public int? CloseReasonId { get; set; }
 
     [ForeignKey(nameof(CloseReasonId))]
@@ -82,4 +90,37 @@ public sealed class Trade
 
     [ForeignKey(nameof(BacktestId))]
     public Backtest? Backtest { get; set; }
+
+    // ── Strongly-typed views over the lookup FK ids ──────────────────────────────
+    // Lookup-table IDs match the enum values, so these are the single home for the
+    // int↔enum mapping. Prefer them over raw casts in C# code. Not mapped (persistence
+    // goes through the *Id columns) and not usable inside EF LINQ queries.
+
+    [NotMapped]
+    public Enums.TradeSide SideEnum
+    {
+        get => (Enums.TradeSide)SideId;
+        set => SideId = (int)value;
+    }
+
+    [NotMapped]
+    public Enums.TradeOrderType OrderTypeEnum
+    {
+        get => (Enums.TradeOrderType)OrderTypeId;
+        set => OrderTypeId = (int)value;
+    }
+
+    [NotMapped]
+    public Enums.TradeStatus StatusEnum
+    {
+        get => (Enums.TradeStatus)StatusId;
+        set => StatusId = (int)value;
+    }
+
+    [NotMapped]
+    public Enums.TradeCloseReason? CloseReasonEnum
+    {
+        get => CloseReasonId is int id ? (Enums.TradeCloseReason)id : null;
+        set => CloseReasonId = value.HasValue ? (int)value.Value : null;
+    }
 }

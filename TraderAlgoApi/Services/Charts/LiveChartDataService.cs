@@ -18,18 +18,34 @@ public sealed class LiveChartDataService(
     PriceFeed                  priceFeed,
     ClosedCandleFeed           closedCandleFeed,
     CandleAggregator           aggregator,
-    ApplicationDbContext       dbContext,
+    IDbContextFactory<ApplicationDbContext> dbContextFactory,
     ISimpleMovingAverageService smaService,
     IRsiService                rsiService,
     IMacdService               macdService) : ILiveChartDataService
 {
+    private const int WindowSize = 200;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    public async Task StreamCandlesAsync(
+    public Task StreamCandlesAsync(
         HttpContext context,
         string? symbol   = null,
         string? interval = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        StreamAsync(context, symbol, interval, withIndicators: false, cancellationToken);
+
+    public Task StreamCandlesWithIndicatorsAsync(
+        HttpContext context,
+        string? symbol   = null,
+        string? interval = null,
+        CancellationToken cancellationToken = default) =>
+        StreamAsync(context, symbol, interval, withIndicators: true, cancellationToken);
+
+    private async Task StreamAsync(
+        HttpContext context,
+        string? symbol,
+        string? interval,
+        bool withIndicators,
+        CancellationToken cancellationToken)
     {
         if (!context.WebSockets.IsWebSocketRequest)
         {
@@ -39,64 +55,41 @@ public sealed class LiveChartDataService(
             return;
         }
 
-        var (streamSymbol, streamInterval, valid) =
-            await ResolveParamsAsync(symbol, interval, cancellationToken);
+        string streamSymbol;
+        string streamInterval;
+        List<decimal>? closes = null;
 
-        if (!valid)
+        // Use a short-lived context only for the up-front reads, then release it before the
+        // (potentially very long) streaming loop — which talks only to the in-memory feeds.
+        await using (var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
         {
-            context.Response.StatusCode = StatusCodes.Status400BadRequest;
-            var validCodes = await dbContext.Intervals
-                .Where(i => i.IsActive)
-                .OrderBy(i => i.Duration)
-                .Select(i => i.Code)
-                .ToListAsync(cancellationToken);
-            await context.Response.WriteAsync(
-                $"Interval must be one of: {string.Join(", ", validCodes)}.", cancellationToken);
-            return;
+            var (resolvedSymbol, resolvedInterval, valid) =
+                await ResolveParamsAsync(dbContext, symbol, interval, cancellationToken);
+
+            if (!valid)
+            {
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                var validCodes = await dbContext.Intervals
+                    .Where(i => i.IsActive)
+                    .OrderBy(i => i.Duration)
+                    .Select(i => i.Code)
+                    .ToListAsync(cancellationToken);
+                await context.Response.WriteAsync(
+                    $"Interval must be one of: {string.Join(", ", validCodes)}.", cancellationToken);
+                return;
+            }
+
+            streamSymbol   = resolvedSymbol;
+            streamInterval = resolvedInterval;
+
+            if (withIndicators)
+                closes = await LoadRecentClosesAsync(dbContext, streamSymbol, streamInterval, WindowSize, cancellationToken);
         }
 
         using var clientSocket = await context.WebSockets.AcceptWebSocketAsync();
 
         await StreamFromFeedsAsync(
-            clientSocket, streamSymbol, streamInterval,
-            withIndicators: false, cancellationToken);
-    }
-
-    public async Task StreamCandlesWithIndicatorsAsync(
-        HttpContext context,
-        string? symbol   = null,
-        string? interval = null,
-        CancellationToken cancellationToken = default)
-    {
-        if (!context.WebSockets.IsWebSocketRequest)
-        {
-            context.Response.StatusCode = StatusCodes.Status426UpgradeRequired;
-            await context.Response.WriteAsync(
-                "This endpoint requires a WebSocket connection.", cancellationToken);
-            return;
-        }
-
-        var (streamSymbol, streamInterval, valid) =
-            await ResolveParamsAsync(symbol, interval, cancellationToken);
-
-        if (!valid)
-        {
-            context.Response.StatusCode = StatusCodes.Status400BadRequest;
-            var validCodes = await dbContext.Intervals
-                .Where(i => i.IsActive)
-                .OrderBy(i => i.Duration)
-                .Select(i => i.Code)
-                .ToListAsync(cancellationToken);
-            await context.Response.WriteAsync(
-                $"Interval must be one of: {string.Join(", ", validCodes)}.", cancellationToken);
-            return;
-        }
-
-        using var clientSocket = await context.WebSockets.AcceptWebSocketAsync();
-
-        await StreamFromFeedsAsync(
-            clientSocket, streamSymbol, streamInterval,
-            withIndicators: true, cancellationToken);
+            clientSocket, streamSymbol, streamInterval, withIndicators, closes, cancellationToken);
     }
 
     // ── Core streaming loop ───────────────────────────────────────────────────
@@ -106,15 +99,9 @@ public sealed class LiveChartDataService(
         string            symbol,
         string            intervalCode,
         bool              withIndicators,
+        List<decimal>?    closes,
         CancellationToken ct)
     {
-        // In-memory rolling window for live indicator computation (same logic as the
-        // old BinanceMarketDataService.StreamKlineCandlesWithIndicatorsAsync).
-        const int WindowSize = 200;
-        var closes = withIndicators
-            ? await LoadRecentClosesAsync(symbol, intervalCode, WindowSize, ct)
-            : null;
-
         // Subscribe to price ticks.
         void OnTick(string tickSymbol, decimal price)
         {
@@ -212,8 +199,8 @@ public sealed class LiveChartDataService(
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private async Task<(string Symbol, string Interval, bool Valid)> ResolveParamsAsync(
-        string? symbol, string? interval, CancellationToken ct)
+    private static async Task<(string Symbol, string Interval, bool Valid)> ResolveParamsAsync(
+        ApplicationDbContext dbContext, string? symbol, string? interval, CancellationToken ct)
     {
         var s = string.IsNullOrWhiteSpace(symbol)
             ? await dbContext.Symbols.Where(x => x.IsDefault).Select(x => x.Code).FirstOrDefaultAsync(ct) ?? string.Empty
@@ -228,8 +215,8 @@ public sealed class LiveChartDataService(
         return (s, i, valid);
     }
 
-    private async Task<List<decimal>> LoadRecentClosesAsync(
-        string symbol, string intervalCode, int count, CancellationToken ct)
+    private static async Task<List<decimal>> LoadRecentClosesAsync(
+        ApplicationDbContext dbContext, string symbol, string intervalCode, int count, CancellationToken ct)
     {
         var closes = await dbContext.KlineData
             .AsNoTracking()

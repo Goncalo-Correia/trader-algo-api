@@ -106,20 +106,13 @@ public sealed class KronosController(IKronosPredictService predictService) : Con
         KronosPredictOptions options,
         CancellationToken cancellationToken)
     {
-        try
-        {
-            var predictions = await predictService.PredictAsync(
-                symbol ?? string.Empty,
-                interval ?? string.Empty,
-                options,
-                cancellationToken);
+        // HttpRequestException (Kronos unavailable) is mapped to 503 by the global exception handler.
+        var predictions = await predictService.PredictAsync(
+            symbol ?? string.Empty,
+            interval ?? string.Empty,
+            options,
+            cancellationToken);
 
-            return Ok(predictions);
-        }
-        catch (HttpRequestException ex)
-        {
-            return StatusCode(StatusCodes.Status503ServiceUnavailable,
-                new { error = "Kronos service is unavailable.", detail = ex.Message });
-        }
+        return Ok(predictions);
     }
 }

@@ -56,10 +56,13 @@ public sealed class TradeBotService(
             StopLoss           = request.StopLoss,
             TakeProfit         = request.TakeProfit,
             Breakeven          = request.Breakeven,
+            BreakevenStop      = request.BreakevenStop,
             IsNySessionOnly    = request.IsNySessionOnly,
+            Delay              = request.Delay,
             DailyProfitGoal    = request.DailyProfitGoal,
             MaxLossesPerDay    = request.MaxLossesPerDay,
             MaxCandlesPerTrade = request.MaxCandlesPerTrade,
+            Fee                = request.Fee,
             CreatedAt          = now,
             UpdatedAt          = now
         };
@@ -127,10 +130,13 @@ public sealed class TradeBotService(
         tradeBot.StopLoss          = request.StopLoss;
         tradeBot.TakeProfit        = request.TakeProfit;
         tradeBot.Breakeven         = request.Breakeven;
+        tradeBot.BreakevenStop     = request.BreakevenStop;
         tradeBot.IsNySessionOnly   = request.IsNySessionOnly;
+        tradeBot.Delay             = request.Delay;
         tradeBot.DailyProfitGoal   = request.DailyProfitGoal;
         tradeBot.MaxLossesPerDay   = request.MaxLossesPerDay;
         tradeBot.MaxCandlesPerTrade = request.MaxCandlesPerTrade;
+        tradeBot.Fee               = request.Fee;
         tradeBot.UpdatedAt         = timeProvider.GetUtcNow();
 
         await dbContext.SaveChangesAsync(cancellationToken);
@@ -250,10 +256,13 @@ public sealed class TradeBotService(
             StopLoss:           b.StopLoss,
             TakeProfit:         b.TakeProfit,
             Breakeven:          b.Breakeven,
+            BreakevenStop:      b.BreakevenStop,
             IsNySessionOnly:    b.IsNySessionOnly,
+            Delay:              b.Delay,
             DailyProfitGoal:    b.DailyProfitGoal,
             MaxLossesPerDay:    b.MaxLossesPerDay,
             MaxCandlesPerTrade: b.MaxCandlesPerTrade,
+            Fee:                b.Fee,
             CreatedAt:          b.CreatedAt.ToUnixTimeMilliseconds(),
             UpdatedAt:          b.UpdatedAt.ToUnixTimeMilliseconds(),
             LastSignalAt:       b.LastSignalAt?.ToUnixTimeMilliseconds());

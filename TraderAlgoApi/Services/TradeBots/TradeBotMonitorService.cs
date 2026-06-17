@@ -148,7 +148,8 @@ public sealed class TradeBotMonitorService(
                     LimitPrice: null,
                     StopLoss: tradeBot.StopLoss,
                     TakeProfit: tradeBot.TakeProfit,
-                    TradingAccountId: tradeBot.TradingAccountId!.Value),
+                    TradingAccountId: tradeBot.TradingAccountId!.Value,
+                    Fee: tradeBot.Fee),
                 cancellationToken);
 
             logger.LogInformation(

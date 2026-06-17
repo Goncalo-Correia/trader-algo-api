@@ -11,7 +11,10 @@ public sealed record UpdateTradeBotRequestDto(
     decimal? TakeProfit,
     bool IsEnabled,
     decimal? Breakeven = null,
+    decimal? BreakevenStop = null,
     bool IsNySessionOnly = false,
+    bool Delay = false,
     decimal? DailyProfitGoal = null,
     int? MaxLossesPerDay = null,
-    int? MaxCandlesPerTrade = null);
+    int? MaxCandlesPerTrade = null,
+    decimal Fee = 0);

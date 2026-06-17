@@ -13,12 +13,8 @@ public sealed class TradingAccountsController(ITradingAccountService tradingAcco
         [FromBody] CreateTradingAccountRequestDto request,
         CancellationToken cancellationToken)
     {
-        try
-        {
-            var account = await tradingAccountService.CreateAsync(request, cancellationToken);
-            return CreatedAtAction(nameof(GetById), new { id = account.Id }, account);
-        }
-        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        var account = await tradingAccountService.CreateAsync(request, cancellationToken);
+        return CreatedAtAction(nameof(GetById), new { id = account.Id }, account);
     }
 
     [HttpGet]
@@ -31,36 +27,20 @@ public sealed class TradingAccountsController(ITradingAccountService tradingAcco
     [HttpGet("{id:long}")]
     public async Task<ActionResult<TradingAccountResponseDto>> GetById(
         long id,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            return Ok(await tradingAccountService.GetByIdAsync(id, cancellationToken));
-        }
-        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
-    }
+        CancellationToken cancellationToken) =>
+        Ok(await tradingAccountService.GetByIdAsync(id, cancellationToken));
 
     [HttpPatch("{id:long}")]
     public async Task<ActionResult<TradingAccountResponseDto>> Update(
         long id,
         [FromBody] UpdateTradingAccountRequestDto request,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            return Ok(await tradingAccountService.UpdateAsync(id, request, cancellationToken));
-        }
-        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
-    }
+        CancellationToken cancellationToken) =>
+        Ok(await tradingAccountService.UpdateAsync(id, request, cancellationToken));
 
     [HttpDelete("{id:long}")]
     public async Task<IActionResult> Delete(long id, CancellationToken cancellationToken)
     {
-        try
-        {
-            await tradingAccountService.DeleteAsync(id, cancellationToken);
-            return NoContent();
-        }
-        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
+        await tradingAccountService.DeleteAsync(id, cancellationToken);
+        return NoContent();
     }
 }
