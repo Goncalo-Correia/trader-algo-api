@@ -30,6 +30,9 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<BacktestStatus> BacktestStatuses => Set<BacktestStatus>();
     public DbSet<SymbolProvider> SymbolProviders  => Set<SymbolProvider>();
 
+    public DbSet<MlTrainingRun> MlTrainingRuns => Set<MlTrainingRun>();
+    public DbSet<MlTrainingRunStatus> MlTrainingRunStatuses => Set<MlTrainingRunStatus>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -193,6 +196,38 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             new BacktestStatus { Id = 3, Name = "Completed" },
             new BacktestStatus { Id = 4, Name = "Failed"    },
             new BacktestStatus { Id = 5, Name = "Cancelled" });
+
+        // -------------------------------------------------------------------
+        // MlTrainingRunStatus — IDs match the C# enum values
+        // -------------------------------------------------------------------
+        modelBuilder.Entity<MlTrainingRunStatus>().HasData(
+            new MlTrainingRunStatus { Id = 1, Name = "Pending"   },
+            new MlTrainingRunStatus { Id = 2, Name = "Running"   },
+            new MlTrainingRunStatus { Id = 3, Name = "Completed" },
+            new MlTrainingRunStatus { Id = 4, Name = "Failed"    });
+
+        // -------------------------------------------------------------------
+        // MlTrainingRuns
+        // -------------------------------------------------------------------
+        modelBuilder.Entity<MlTrainingRun>(entity =>
+        {
+            entity.HasIndex(r => r.ModelId);
+
+            entity.HasOne(r => r.Symbol)
+                .WithMany()
+                .HasForeignKey(r => r.SymbolId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(r => r.Interval)
+                .WithMany()
+                .HasForeignKey(r => r.IntervalId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(r => r.Status)
+                .WithMany()
+                .HasForeignKey(r => r.StatusId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
 
         // -------------------------------------------------------------------
         // TradingAccounts
