@@ -166,6 +166,11 @@ decision process the same way a backtest is streamed.
 3. Each run's deterministic **decision log** is stored uniquely by `trainingRunId` (never
    overwritten), so re-training the same `model_id` preserves every run's history.
 
+Risk hyperparameters are **absolute amounts**, consistent with backtests — not fractions.
+`stopLoss`/`takeProfit`/`breakeven`/`breakevenStop` are price offsets from entry, `feeRate` is a
+flat cash fee per round-trip, `slippageRate` is a flat price offset per fill, and
+`maxTrailingDrawdownThreshold` is a cash drawdown from peak balance.
+
 **Decision replay**
 
 `WS /ws/ml/training?trainingRunId={id}` streams the run's candles (from the database) zipped with
