@@ -14,6 +14,7 @@ to **Kronos** for AI candle forecasting and an **ML policy** sidecar for model-d
 - [Trading strategies](#trading-strategies)
 - [Trade bots](#trade-bots)
 - [Backtests](#backtests)
+- [ML policy & training](#ml-policy--training)
 - [API reference](#api-reference)
 - [Running locally](#running-locally)
 - [Kronos forecasting](#kronos-forecasting)
@@ -146,6 +147,41 @@ a template trade bot that holds its strategy and risk settings.
 
 ---
 
+## ML policy & training
+
+The **ML Policy** strategy delegates entry decisions to an external PPO model served by the
+[trader-algo-ml](https://github.com/Goncalo-Correia/trader-algo-ml) sidecar (base URL under
+`MlPolicy:`). This API orchestrates training runs and lets the frontend replay a trained model's
+decision process the same way a backtest is streamed.
+
+**Training runs**
+
+1. `POST /api/ml/train` (symbol, interval, `from_date`/`to_date`, `model_id`, and optional PPO
+   hyperparameters) records an `MlTrainingRun` as `Pending` and forwards the job to the sidecar,
+   returning the new `trainingRunId`. Null hyperparameters are omitted so the trainer applies its
+   own defaults.
+2. The sidecar trains in the background and calls back to `PATCH /api/ml/training-runs/{id}/complete`,
+   moving the run `Pending → Running → Completed` (or `Failed`) and recording final balance, PnL %,
+   and trade count.
+3. Each run's deterministic **decision log** is stored uniquely by `trainingRunId` (never
+   overwritten), so re-training the same `model_id` preserves every run's history.
+
+Risk hyperparameters are **absolute amounts**, consistent with backtests — not fractions.
+`stopLoss`/`takeProfit`/`breakeven`/`breakevenStop` are price offsets from entry, `feeRate` is a
+flat cash fee per round-trip, `slippageRate` is a flat price offset per fill, and
+`maxTrailingDrawdownThreshold` is a cash drawdown from peak balance.
+
+**Decision replay**
+
+`WS /ws/ml/training?trainingRunId={id}` streams the run's candles (from the database) zipped with
+the model's per-candle decisions — emitting `candle` and `mlDecision` frames — so the entry/hold
+choices and confidence can be visualised candle-by-candle. `GET /api/ml/training-runs/{id}/decisions`
+returns the same log as a single payload for static rendering.
+
+Deleting a run (`DELETE /api/ml/training-runs/{id}`) also removes its decision log from the sidecar.
+
+---
+
 ## API reference
 
 REST base path `/api`. Enums (side, status, strategy, etc.) serialize as strings.
@@ -155,6 +191,7 @@ REST base path `/api`. Enums (side, status, strategy, etc.) serialize as strings
 | **Trading accounts** | `POST/GET /trading-accounts` · `GET/PATCH/DELETE /trading-accounts/{id}` |
 | **Trade bots** | `POST/GET /tradebots` · `GET/PATCH/DELETE /tradebots/{id}` · `POST /tradebots/{id}/enable` · `/disable` |
 | **Backtests** | `POST/GET /backtests` · `GET/DELETE /backtests/{id}` |
+| **ML** | `POST /ml/train` · `POST /ml/decide` · `GET /ml/training-runs` · `GET/DELETE /ml/training-runs/{id}` · `GET /ml/training-runs/{id}/decisions` · `PATCH /ml/training-runs/{id}/complete` |
 | **Trades** | `POST /trades` · `POST /trades/{id}/stop` · `PATCH /trades/{id}` · `GET /trades/account/{id}/active` · `/history` · `GET /trades/backtest/{id}` |
 | **Rules** | `GET /rules/{sma\|rsi\|macd}/evaluate?symbol=&interval=` |
 | **Charts** | `GET /charts/candles?symbol=&interval=&lookback=` |
@@ -170,6 +207,7 @@ REST base path `/api`. Enums (side, status, strategy, etc.) serialize as strings
 | `WS /ws/charts/candles?symbol=&interval=` | Live candles |
 | `WS /ws/charts/candleswithindicators?symbol=&interval=` | Live candles + SMA/RSI/MACD |
 | `WS /ws/charts/backtest?backtestId=&delay=` | Backtest replay |
+| `WS /ws/ml/training?trainingRunId=&delay=` | ML training decision replay |
 | `WS /ws/tradebots/events?tradingAccountId=` | Live trade events |
 
 Errors return RFC 7807 ProblemDetails: `400` invalid input, `404` not found, `409` conflict,

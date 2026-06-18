@@ -53,7 +53,7 @@ builder.Services.AddCors(options =>
 var connectionString = builder.Configuration.GetConnectionString("Supabase");
 void ConfigureDb(DbContextOptionsBuilder options) => options.UseNpgsql(connectionString);
 builder.Services.AddDbContext<ApplicationDbContext>(ConfigureDb);
-builder.Services.AddDbContextFactory<ApplicationDbContext>(ConfigureDb);
+builder.Services.AddDbContextFactory<ApplicationDbContext>(ConfigureDb, ServiceLifetime.Scoped);
 
 builder.Services.AddSingleton(TimeProvider.System);
 
@@ -130,6 +130,7 @@ builder.Services.AddHttpClient("MlPolicy", client =>
 builder.Services.AddSingleton(new MlConnectorOptions(
     ModelId: builder.Configuration["MlPolicy:ModelId"] ?? "ppo-v1"));
 builder.Services.AddScoped<IMlConnectorService, MlConnectorService>();
+builder.Services.AddScoped<IMlTrainingStreamService, MlTrainingStreamService>();
 
 var app = builder.Build();
 

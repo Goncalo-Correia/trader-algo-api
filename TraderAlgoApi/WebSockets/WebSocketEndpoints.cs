@@ -1,5 +1,6 @@
 using TraderAlgoApi.Services.Backtests;
 using TraderAlgoApi.Services.Charts;
+using TraderAlgoApi.Services.Ml;
 using TraderAlgoApi.Services.TradeEvents;
 
 namespace TraderAlgoApi.WebSockets;
@@ -38,6 +39,17 @@ internal static class WebSocketEndpoints
             CancellationToken cancellationToken) =>
         {
             await backtestStreamService.StreamAsync(context, backtestId, delay, cancellationToken);
+        })
+        .ExcludeFromDescription();
+
+        app.MapGet("/ws/ml/training", async (
+            HttpContext context,
+            long trainingRunId,
+            bool delay,
+            IMlTrainingStreamService mlTrainingStreamService,
+            CancellationToken cancellationToken) =>
+        {
+            await mlTrainingStreamService.StreamAsync(context, trainingRunId, delay, cancellationToken);
         })
         .ExcludeFromDescription();
 
