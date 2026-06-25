@@ -30,7 +30,6 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<BacktestStatus> BacktestStatuses => Set<BacktestStatus>();
     public DbSet<SymbolProvider> SymbolProviders  => Set<SymbolProvider>();
 
-    public DbSet<MlModel> MlModels => Set<MlModel>();
     public DbSet<MlPolicy> MlPolicies => Set<MlPolicy>();
     public DbSet<MlTrainingRun> MlTrainingRuns => Set<MlTrainingRun>();
     public DbSet<MlTrainingRunStatus> MlTrainingRunStatuses => Set<MlTrainingRunStatus>();
@@ -210,24 +209,10 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             new MlTrainingRunStatus { Id = 4, Name = "Failed"    });
 
         // -------------------------------------------------------------------
-        // MlModels — seeded with the default PPO model
-        // -------------------------------------------------------------------
-        modelBuilder.Entity<MlModel>(entity =>
-        {
-            entity.HasIndex(m => m.Name).IsUnique();
-            entity.HasData(new MlModel { Id = 1, Name = "ppo-v1" });
-        });
-
-        // -------------------------------------------------------------------
-        // MlPolicies — training configuration (model + symbol/interval + hyperparameters)
+        // MlPolicies — training configuration (symbol/interval + hyperparameters)
         // -------------------------------------------------------------------
         modelBuilder.Entity<MlPolicy>(entity =>
         {
-            entity.HasOne(p => p.Model)
-                .WithMany()
-                .HasForeignKey(p => p.ModelId)
-                .OnDelete(DeleteBehavior.Restrict);
-
             entity.HasOne(p => p.Symbol)
                 .WithMany()
                 .HasForeignKey(p => p.SymbolId)

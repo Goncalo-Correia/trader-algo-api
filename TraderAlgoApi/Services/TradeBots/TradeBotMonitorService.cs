@@ -56,7 +56,6 @@ public sealed class TradeBotMonitorService(
             var tradeBots = await dbContext.TradeBots
                 .Include(b => b.TradingAccount)
                 .Include(b => b.TradingStrategy)
-                .Include(b => b.MlPolicy).ThenInclude(p => p!.Model)
                 .Include(b => b.MlPolicy).ThenInclude(p => p!.Symbol)
                 .Include(b => b.MlPolicy).ThenInclude(p => p!.Interval)
                 .Include(b => b.Symbol)

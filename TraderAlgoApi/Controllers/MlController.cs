@@ -22,7 +22,6 @@ public sealed class MlController(
         CancellationToken cancellationToken)
     {
         var policy = await dbContext.MlPolicies
-            .Include(p => p.Model)
             .Include(p => p.Symbol)
             .Include(p => p.Interval)
             .FirstOrDefaultAsync(p => p.Id == request.MlPolicyId, cancellationToken);
@@ -58,7 +57,7 @@ public sealed class MlController(
             Interval:      policy.Interval.Code,
             FromDate:      from.ToString("yyyy-MM-ddTHH:mm:ssZ"),
             ToDate:        to.ToString("yyyy-MM-ddTHH:mm:ssZ"),
-            ModelId:       policy.Model.Name,
+            ModelId:       policy.Id.ToString(),
             TotalTimesteps:                policy.TotalTimesteps,
             InitialBalance:                policy.InitialBalance,
             Quantity:                      policy.Quantity,
@@ -90,9 +89,8 @@ public sealed class MlController(
 
         return Ok(new MlTrainStartedResponse(
             TrainingRunId: run.Id,
-            ModelId:       policy.Model.Name,
             Status:        run.StatusEnum,
-            Message:       $"Training run {run.Id} ('{policy.Model.Name}') started on " +
+            Message:       $"Training run {run.Id} (policy {policy.Id}) started on " +
                            $"{policy.Symbol.Code}/{policy.Interval.Code} " +
                            $"({request.From:yyyy-MM-dd} -> {request.To:yyyy-MM-dd})."));
     }
@@ -103,7 +101,6 @@ public sealed class MlController(
     {
         var runs = await dbContext.MlTrainingRuns
             .AsNoTracking()
-            .Include(r => r.Policy).ThenInclude(p => p.Model)
             .Include(r => r.Policy).ThenInclude(p => p.Symbol)
             .Include(r => r.Policy).ThenInclude(p => p.Interval)
             .OrderByDescending(r => r.StartedAt)
@@ -119,7 +116,6 @@ public sealed class MlController(
     {
         var run = await dbContext.MlTrainingRuns
             .AsNoTracking()
-            .Include(r => r.Policy).ThenInclude(p => p.Model)
             .Include(r => r.Policy).ThenInclude(p => p.Symbol)
             .Include(r => r.Policy).ThenInclude(p => p.Interval)
             .FirstOrDefaultAsync(r => r.Id == id, cancellationToken);
@@ -191,7 +187,6 @@ public sealed class MlController(
     {
         var policy = await dbContext.MlPolicies
             .AsNoTracking()
-            .Include(p => p.Model)
             .Include(p => p.Symbol)
             .Include(p => p.Interval)
             .FirstOrDefaultAsync(p => p.Id == request.MlPolicyId, cancellationToken);
@@ -242,7 +237,7 @@ public sealed class MlController(
             MlPolicyId:   policy.Id,
             Symbol:       symbolCode,
             Interval:     intervalCode,
-            ModelId:      request.ModelId ?? policy.Model.Name,
+            ModelId:      policy.Id.ToString(),
             Candle: new MlCandleFeatures(
                 Open:           kline.Open,
                 High:           kline.High,
@@ -288,7 +283,6 @@ public sealed class MlController(
         new(
             Id:             r.Id,
             MlPolicyId:     r.MlPolicyId,
-            ModelId:        r.Policy.Model.Name,
             SymbolCode:     r.Policy.Symbol.Code,
             IntervalCode:   r.Policy.Interval.Code,
             From:           r.From.ToUnixTimeSeconds(),

@@ -229,9 +229,14 @@ flowchart LR
 A trade bot watches one `symbol × interval` and trades a strategy automatically against a linked
 trading account. `TradeBotMonitorService` evaluates every enabled bot on each candle close.
 
-Key fields: `tradingStrategyId`, `symbol`/`interval`, `quantity`, `stopLoss`/`takeProfit`,
-`breakeven` + `breakevenStop`, `fee`, `isNySessionOnly`, `dailyProfitGoal`, `maxLossesPerDay`,
-`maxCandlesPerTrade`, `isEnabled`.
+Key fields: `tradingStrategyId`, `mlPolicyId` (required when the strategy is **ML Policy**),
+`symbol`/`interval`, `quantity`, `stopLoss`/`takeProfit`, `breakeven` + `breakevenStop`, `fee`,
+`isNySessionOnly`, `delay`, `dailyProfitGoal`, `maxLossesPerDay`, `maxCandlesPerTrade`, `isEnabled`.
+
+When `tradingStrategyId` is **ML Policy** the bot must reference an `mlPolicyId`: the policy's
+symbol/interval must match the bot's, and its risk settings (SL/TP, breakeven, fee, daily limits)
+are copied onto the bot. The entry signal then comes from the ML sidecar instead of an indicator
+rule. Any other strategy rejects an `mlPolicyId`.
 
 **Flow.** On each closed candle the monitor selects enabled bots for that symbol/interval, asks
 `TradeBotSignalService` for a signal, and acts:
@@ -258,7 +263,9 @@ pushed to `WS /ws/tradebots/events?tradingAccountId=`.
 
 A backtest replays historical candles through a strategy and records every simulated trade, the
 equity curve, drawdowns, and aggregate PnL — without touching a real account. Each backtest owns
-a template trade bot that holds its strategy and risk settings.
+a template trade bot that holds its strategy and risk settings. The strategy can be any of the
+indicator strategies or **ML Policy** — pass `mlPolicyId` and the risk settings are taken from the
+policy (each candle's entry decision is fetched from the ML sidecar).
 
 ```mermaid
 sequenceDiagram
@@ -299,18 +306,16 @@ frontend replay a trained model's decision process the same way a backtest is st
 
 ```mermaid
 erDiagram
-  ml_models ||--o{ ml_policies : "used by"
   ml_policies ||--o{ ml_training_runs : "has runs"
-  ml_models { int Id; string Name }
-  ml_policies { long Id; int ModelId; int SymbolId; int IntervalId; int TotalTimesteps; decimal hyperparameters }
+  ml_policies { long Id; int SymbolId; int IntervalId; int TotalTimesteps; decimal hyperparameters }
   ml_training_runs { long Id; long MlPolicyId; datetimeoffset From; datetimeoffset To; int StatusId; decimal FinalBalance }
 ```
 
-- **`ml_models`** — model registry (seeded with `ppo-v1`); `Name` matches the Python model id.
-- **`ml_policies`** — a reusable config: model + symbol/interval + all PPO/risk hyperparameters
+- **`ml_policies`** — a reusable config: symbol/interval + all PPO/risk hyperparameters
   (`totalTimesteps`, `initialBalance`, `quantity`, `takeProfit`, `stopLoss`, `breakeven`,
   `breakevenStop`, `fee`, `slippage`, `dailyProfit`, `dailyDrawdownLimit`, `maxCandlesPerTrade`,
-  `maxTrailingDrawdown`).
+  `maxTrailingDrawdown`). Live trade bots and backtests running the ML Policy strategy reference a
+  policy by id (`mlPolicyId`); the policy id is also the model identifier sent to the sidecar.
 - **`ml_training_runs`** — one execution of a policy over a date range (model/symbol/interval/params
   come from the policy); holds only run-specific state: dates, status, and final metrics.
 
@@ -391,7 +396,7 @@ REST base path `/api`. Enums (side, status, strategy, etc.) serialize as strings
 | **Trade bots** | `POST/GET /tradebots` · `GET/PATCH/DELETE /tradebots/{id}` · `POST /tradebots/{id}/enable` · `/disable` |
 | **Backtests** | `POST/GET /backtests` · `GET/DELETE /backtests/{id}` |
 | **Trades** | `POST /trades` · `POST /trades/{id}/stop` · `PATCH /trades/{id}` · `GET /trades/account/{id}/active` · `/history` · `GET /trades/backtest/{id}` |
-| **ML policies** | `GET /ml/models` · `GET/POST /ml/policies` · `GET/PUT/DELETE /ml/policies/{id}` |
+| **ML policies** | `GET/POST /ml/policies` · `GET/PUT/DELETE /ml/policies/{id}` |
 | **ML training** | `POST /ml/train` · `POST /ml/decide` · `GET /ml/training-runs` · `GET/DELETE /ml/training-runs/{id}` · `GET /ml/training-runs/{id}/decisions` · `PATCH /ml/training-runs/{id}/complete` |
 | **Rules** | `GET /rules/{sma\|rsi\|macd}/evaluate?symbol=&interval=` |
 | **Charts** | `GET /charts/candles?symbol=&interval=&lookback=` · `GET /charts/candles/indicators` |

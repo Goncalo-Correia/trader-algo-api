@@ -12,26 +12,12 @@ public sealed class MlPoliciesController(
     ApplicationDbContext dbContext,
     TimeProvider timeProvider) : ControllerBase
 {
-    // ── Models registry (for selecting a model when creating a policy) ──────────────
-    [HttpGet("models")]
-    public async Task<ActionResult<IReadOnlyList<MlModelResponse>>> GetModels(CancellationToken cancellationToken)
-    {
-        var models = await dbContext.MlModels
-            .AsNoTracking()
-            .OrderBy(m => m.Name)
-            .Select(m => new MlModelResponse(m.Id, m.Name))
-            .ToListAsync(cancellationToken);
-
-        return Ok(models);
-    }
-
     // ── Policies ────────────────────────────────────────────────────────────────────
     [HttpGet("policies")]
     public async Task<ActionResult<IReadOnlyList<MlPolicyResponse>>> GetPolicies(CancellationToken cancellationToken)
     {
         var rows = await dbContext.MlPolicies
             .AsNoTracking()
-            .Include(p => p.Model)
             .Include(p => p.Symbol)
             .Include(p => p.Interval)
             .OrderByDescending(p => p.CreatedAt)
@@ -46,7 +32,6 @@ public sealed class MlPoliciesController(
     {
         var row = await dbContext.MlPolicies
             .AsNoTracking()
-            .Include(p => p.Model)
             .Include(p => p.Symbol)
             .Include(p => p.Interval)
             .Where(p => p.Id == id)
@@ -67,7 +52,6 @@ public sealed class MlPoliciesController(
 
         var policy = new MlPolicy
         {
-            ModelId    = request.ModelId,
             SymbolId   = resolved.SymbolId,
             IntervalId = resolved.IntervalId,
             CreatedAt  = timeProvider.GetUtcNow()
@@ -94,7 +78,6 @@ public sealed class MlPoliciesController(
         if (resolved.Error is not null)
             return NotFound(resolved.Error);
 
-        policy.ModelId    = request.ModelId;
         policy.SymbolId   = resolved.SymbolId;
         policy.IntervalId = resolved.IntervalId;
         Apply(policy, request);
@@ -125,9 +108,6 @@ public sealed class MlPoliciesController(
     private async Task<(int SymbolId, int IntervalId, string? Error)> ResolveReferencesAsync(
         MlPolicyRequest request, CancellationToken cancellationToken)
     {
-        if (!await dbContext.MlModels.AnyAsync(m => m.Id == request.ModelId, cancellationToken))
-            return (0, 0, $"Model {request.ModelId} not found.");
-
         var symbolId = await dbContext.Symbols
             .Where(s => s.Code == request.Symbol).Select(s => (int?)s.Id).FirstOrDefaultAsync(cancellationToken);
         if (symbolId is null)
@@ -161,8 +141,6 @@ public sealed class MlPoliciesController(
     private static MlPolicyResponse ToDto(MlPolicy p, int trainingRunCount) =>
         new(
             Id:                  p.Id,
-            ModelId:             p.ModelId,
-            ModelName:           p.Model.Name,
             SymbolId:            p.SymbolId,
             SymbolCode:          p.Symbol.Code,
             IntervalId:          p.IntervalId,
