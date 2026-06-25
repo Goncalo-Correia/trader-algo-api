@@ -62,18 +62,6 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
                     IsDefault   = true,
                     ProviderId  = (int)Models.Enums.SymbolProvider.Binance,
                     CreatedAt   = new DateTimeOffset(2026, 4, 16, 0, 0, 0, TimeSpan.Zero)
-                },
-                new Symbol
-                {
-                    Id          = 2,
-                    Code        = "SPY",
-                    BaseAsset   = "SPY",
-                    QuoteAsset  = "USD",
-                    DisplayName = "SPY",
-                    IsActive    = true,
-                    IsDefault   = false,
-                    ProviderId  = (int)Models.Enums.SymbolProvider.Alpaca,
-                    CreatedAt   = new DateTimeOffset(2026, 5, 1, 0, 0, 0, TimeSpan.Zero)
                 });
         });
 
@@ -186,8 +174,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         // SymbolProvider — IDs match the C# enum values
         // -------------------------------------------------------------------
         modelBuilder.Entity<SymbolProvider>().HasData(
-            new SymbolProvider { Id = 1, Name = "Binance" },
-            new SymbolProvider { Id = 2, Name = "Alpaca"  });
+            new SymbolProvider { Id = 1, Name = "Binance" });
 
         // -------------------------------------------------------------------
         // BacktestStatus — IDs match the C# enum values

@@ -2,7 +2,7 @@ namespace TraderAlgoApi.Services.MarketData;
 
 /// <summary>
 /// Provider-neutral interface for fetching historical candle data.
-/// Implementations: BinanceMarketDataService, AlpacaMarketDataProvider.
+/// Implementations: BinanceMarketDataService.
 /// </summary>
 public interface IMarketDataProvider
 {

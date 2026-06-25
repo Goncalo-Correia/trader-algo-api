@@ -1,9 +1,7 @@
 namespace TraderAlgoApi.Services.MarketData;
 
 /// <summary>
-/// Provider-neutral candle (OHLCV bar). Fields that have no equity equivalent
-/// (TakerBuyBaseVolume, TakerBuyQuoteVolume) are stored as 0 for Alpaca bars.
-/// QuoteAssetVolume stores dollar volume (volume × VWAP) for equities.
+/// Provider-neutral candle (OHLCV bar).
 /// </summary>
 public sealed record Candle(
     DateTimeOffset OpenTime,
