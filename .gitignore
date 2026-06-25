@@ -131,3 +131,9 @@ desktop.ini
 *.bak
 *.swp
 *~
+
+# ==========================================
+# Local tooling / one-off scripts
+# ==========================================
+.claude/settings.local.json
+Scripts/

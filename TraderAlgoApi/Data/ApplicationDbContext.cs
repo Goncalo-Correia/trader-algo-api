@@ -180,7 +180,8 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             new TradingStrategy { Id = 1, Name = "SMA"      },
             new TradingStrategy { Id = 2, Name = "RSI"      },
             new TradingStrategy { Id = 3, Name = "MACD"     },
-            new TradingStrategy { Id = 4, Name = "SMA MACD" });
+            new TradingStrategy { Id = 4, Name = "SMA MACD" },
+            new TradingStrategy { Id = 5, Name = "ML Policy" });
 
         // -------------------------------------------------------------------
         // SymbolProvider — IDs match the C# enum values
@@ -294,6 +295,8 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
 
             entity.HasIndex(b => b.TradingStrategyId);
 
+            entity.HasIndex(b => b.MlPolicyId);
+
             entity.HasIndex(b => b.TradingAccountId)
                 .IsUnique()
                 .HasFilter("\"TradingAccountId\" IS NOT NULL AND \"IsEnabled\"");
@@ -315,6 +318,11 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             entity.HasOne(b => b.TradingStrategy)
                 .WithMany()
                 .HasForeignKey(b => b.TradingStrategyId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(b => b.MlPolicy)
+                .WithMany(p => p.TradeBots)
+                .HasForeignKey(b => b.MlPolicyId)
                 .OnDelete(DeleteBehavior.Restrict);
 
             entity.HasOne(b => b.Symbol)

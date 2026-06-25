@@ -13,6 +13,8 @@ public sealed class TradeBotService(
     TimeProvider timeProvider,
     ITradeEventPublisher tradeEventPublisher) : ITradeBotService
 {
+    private const int MlPolicyStrategyId = (int)TradingStrategy.MlPolicy;
+
     public async Task<TradeBotResponseDto> CreateAsync(
         CreateTradeBotRequestDto request,
         CancellationToken cancellationToken = default)
@@ -43,29 +45,32 @@ public sealed class TradeBotService(
 
         var symbol = await LoadActiveSymbolAsync(request.SymbolCode, cancellationToken);
         var interval = await LoadActiveIntervalAsync(request.IntervalCode, cancellationToken);
+        var policy = await ResolveMlPolicyForCreateAsync(request, symbol.Code, interval.Code, cancellationToken);
+        if (policy is not null)
+        {
+            symbol = policy.Symbol;
+            interval = policy.Interval;
+        }
 
         var now = timeProvider.GetUtcNow();
         var tradeBot = new TradeBot
         {
             TradingAccountId   = account.Id,
             TradingStrategyId  = request.TradingStrategyId,
+            MlPolicyId         = policy?.Id,
             SymbolId           = symbol.Id,
             IntervalId         = interval.Id,
             IsEnabled          = request.IsEnabled,
-            Quantity           = request.Quantity,
-            StopLoss           = request.StopLoss,
-            TakeProfit         = request.TakeProfit,
-            Breakeven          = request.Breakeven,
-            BreakevenStop      = request.BreakevenStop,
             IsNySessionOnly    = request.IsNySessionOnly,
             Delay              = request.Delay,
-            DailyProfitGoal    = request.DailyProfitGoal,
-            MaxLossesPerDay    = request.MaxLossesPerDay,
-            MaxCandlesPerTrade = request.MaxCandlesPerTrade,
-            Fee                = request.Fee,
             CreatedAt          = now,
             UpdatedAt          = now
         };
+
+        if (policy is null)
+            ApplyRequestRisk(tradeBot, request);
+        else
+            ApplyPolicyRisk(tradeBot, policy);
 
         dbContext.TradeBots.Add(tradeBot);
         await dbContext.SaveChangesAsync(cancellationToken);
@@ -73,6 +78,7 @@ public sealed class TradeBotService(
         tradeBot.TradingAccount = account;
         tradeBot.Symbol = symbol;
         tradeBot.Interval = interval;
+        tradeBot.MlPolicy = policy;
 
         return ToDto(tradeBot);
     }
@@ -116,33 +122,36 @@ public sealed class TradeBotService(
 
         var symbol = await LoadActiveSymbolAsync(request.SymbolCode, cancellationToken);
         var interval = await LoadActiveIntervalAsync(request.IntervalCode, cancellationToken);
-        var wasEnabled = tradeBot.IsEnabled;
-
-        if (request.IsEnabled && !wasEnabled)
+        var policy = await ResolveMlPolicyForUpdateAsync(tradeBot, request, symbol.Code, interval.Code, cancellationToken);
+        if (policy is not null)
         {
-            await EnsureCanEnableAsync(tradeBot, cancellationToken);
+            symbol = policy.Symbol;
+            interval = policy.Interval;
         }
+
+        var wasEnabled = tradeBot.IsEnabled;
 
         tradeBot.SymbolId          = symbol.Id;
         tradeBot.IntervalId        = interval.Id;
+        tradeBot.MlPolicyId        = policy?.Id;
         tradeBot.IsEnabled         = request.IsEnabled;
-        tradeBot.Quantity          = request.Quantity;
-        tradeBot.StopLoss          = request.StopLoss;
-        tradeBot.TakeProfit        = request.TakeProfit;
-        tradeBot.Breakeven         = request.Breakeven;
-        tradeBot.BreakevenStop     = request.BreakevenStop;
         tradeBot.IsNySessionOnly   = request.IsNySessionOnly;
         tradeBot.Delay             = request.Delay;
-        tradeBot.DailyProfitGoal   = request.DailyProfitGoal;
-        tradeBot.MaxLossesPerDay   = request.MaxLossesPerDay;
-        tradeBot.MaxCandlesPerTrade = request.MaxCandlesPerTrade;
-        tradeBot.Fee               = request.Fee;
         tradeBot.UpdatedAt         = timeProvider.GetUtcNow();
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        if (policy is null)
+            ApplyRequestRisk(tradeBot, request);
+        else
+            ApplyPolicyRisk(tradeBot, policy);
 
         tradeBot.Symbol = symbol;
         tradeBot.Interval = interval;
+        tradeBot.MlPolicy = policy;
+
+        if (request.IsEnabled && !wasEnabled)
+            await EnsureCanEnableAsync(tradeBot, cancellationToken);
+
+        await dbContext.SaveChangesAsync(cancellationToken);
 
         if (wasEnabled != tradeBot.IsEnabled)
             PublishBotStatusEvent(tradeBot);
@@ -191,6 +200,7 @@ public sealed class TradeBotService(
         dbContext.TradeBots
             .Include(b => b.TradingAccount)
             .Include(b => b.TradingStrategy)
+            .Include(b => b.MlPolicy)
             .Include(b => b.Symbol)
             .Include(b => b.Interval);
 
@@ -204,8 +214,121 @@ public sealed class TradeBotService(
             .FirstOrDefaultAsync(i => i.IsActive && i.Code == intervalCode, cancellationToken)
         ?? throw new ArgumentException($"Active interval '{intervalCode}' not found.");
 
+    private async Task<MlPolicy?> ResolveMlPolicyForCreateAsync(
+        CreateTradeBotRequestDto request,
+        string symbolCode,
+        string intervalCode,
+        CancellationToken cancellationToken)
+    {
+        if (request.TradingStrategyId != MlPolicyStrategyId)
+        {
+            if (request.MlPolicyId.HasValue)
+                throw new ArgumentException("'mlPolicyId' is only valid for the ML Policy strategy.");
+
+            return null;
+        }
+
+        if (request.MlPolicyId is not long policyId)
+            throw new ArgumentException("'mlPolicyId' is required for the ML Policy strategy.");
+
+        var policy = await LoadMlPolicyAsync(policyId, cancellationToken);
+        ValidatePolicyMarket(policy, symbolCode, intervalCode);
+        return policy;
+    }
+
+    private async Task<MlPolicy?> ResolveMlPolicyForUpdateAsync(
+        TradeBot tradeBot,
+        UpdateTradeBotRequestDto request,
+        string symbolCode,
+        string intervalCode,
+        CancellationToken cancellationToken)
+    {
+        if (tradeBot.TradingStrategyId != MlPolicyStrategyId)
+        {
+            if (request.MlPolicyId.HasValue)
+                throw new ArgumentException("'mlPolicyId' is only valid for the ML Policy strategy.");
+
+            return null;
+        }
+
+        var policyId = request.MlPolicyId ?? tradeBot.MlPolicyId
+            ?? throw new ArgumentException("'mlPolicyId' is required for the ML Policy strategy.");
+
+        var policy = await LoadMlPolicyAsync(policyId, cancellationToken);
+        ValidatePolicyMarket(policy, symbolCode, intervalCode);
+        return policy;
+    }
+
+    private async Task<MlPolicy> LoadMlPolicyAsync(long policyId, CancellationToken cancellationToken) =>
+        await dbContext.MlPolicies
+            .Include(p => p.Model)
+            .Include(p => p.Symbol)
+            .Include(p => p.Interval)
+            .FirstOrDefaultAsync(p => p.Id == policyId, cancellationToken)
+        ?? throw new ArgumentException($"ML policy {policyId} not found.");
+
+    private static void ValidatePolicyMarket(MlPolicy policy, string symbolCode, string intervalCode)
+    {
+        if (!string.Equals(policy.Symbol.Code, symbolCode, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(policy.Interval.Code, intervalCode, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                $"ML policy {policy.Id} is configured for {policy.Symbol.Code}/{policy.Interval.Code}; the tradebot must use the same symbol and interval.");
+        }
+    }
+
+    private static void ApplyRequestRisk(TradeBot tradeBot, CreateTradeBotRequestDto request)
+    {
+        tradeBot.Quantity = request.Quantity;
+        tradeBot.StopLoss = request.StopLoss;
+        tradeBot.TakeProfit = request.TakeProfit;
+        tradeBot.Breakeven = request.Breakeven;
+        tradeBot.BreakevenStop = request.BreakevenStop;
+        tradeBot.DailyProfitGoal = request.DailyProfitGoal;
+        tradeBot.MaxLossesPerDay = request.MaxLossesPerDay;
+        tradeBot.MaxCandlesPerTrade = request.MaxCandlesPerTrade;
+        tradeBot.Fee = request.Fee;
+    }
+
+    private static void ApplyRequestRisk(TradeBot tradeBot, UpdateTradeBotRequestDto request)
+    {
+        tradeBot.Quantity = request.Quantity;
+        tradeBot.StopLoss = request.StopLoss;
+        tradeBot.TakeProfit = request.TakeProfit;
+        tradeBot.Breakeven = request.Breakeven;
+        tradeBot.BreakevenStop = request.BreakevenStop;
+        tradeBot.DailyProfitGoal = request.DailyProfitGoal;
+        tradeBot.MaxLossesPerDay = request.MaxLossesPerDay;
+        tradeBot.MaxCandlesPerTrade = request.MaxCandlesPerTrade;
+        tradeBot.Fee = request.Fee;
+    }
+
+    private static void ApplyPolicyRisk(TradeBot tradeBot, MlPolicy policy)
+    {
+        tradeBot.Quantity = policy.Quantity;
+        tradeBot.StopLoss = policy.StopLoss;
+        tradeBot.TakeProfit = policy.TakeProfit;
+        tradeBot.Breakeven = policy.Breakeven;
+        tradeBot.BreakevenStop = policy.BreakevenStop;
+        tradeBot.DailyProfitGoal = policy.DailyProfit;
+        tradeBot.MaxLossesPerDay = null;
+        tradeBot.MaxCandlesPerTrade = policy.MaxCandlesPerTrade;
+        tradeBot.Fee = policy.Fee;
+    }
+
     private async Task EnsureCanEnableAsync(TradeBot tradeBot, CancellationToken cancellationToken)
     {
+        if (tradeBot.TradingStrategyId == MlPolicyStrategyId)
+        {
+            if (tradeBot.MlPolicyId is not long policyId)
+                throw new InvalidOperationException($"Tradebot {tradeBot.Id} uses ML Policy but has no linked ML policy.");
+
+            var policyExists = tradeBot.MlPolicy is not null ||
+                await dbContext.MlPolicies.AnyAsync(p => p.Id == policyId, cancellationToken);
+            if (!policyExists)
+                throw new InvalidOperationException($"ML policy {policyId} not found.");
+        }
+
         if (tradeBot.TradingAccountId is long accountId)
         {
             if (tradeBot.TradingAccount?.IsActive != true)
@@ -249,6 +372,7 @@ public sealed class TradeBotService(
             TradingAccountName: b.TradingAccount?.Name,
             BacktestId:         b.BacktestId,
             TradingStrategy:    (TradingStrategy)b.TradingStrategyId,
+            MlPolicyId:         b.MlPolicyId,
             SymbolCode:         b.Symbol.Code,
             IntervalCode:       b.Interval.Code,
             IsEnabled:          b.IsEnabled,

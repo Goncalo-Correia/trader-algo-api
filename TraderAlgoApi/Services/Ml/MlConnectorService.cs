@@ -1,7 +1,5 @@
 using System.Net;
 using System.Net.Http.Json;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using TraderAlgoApi.Dtos.Ml;
 
 namespace TraderAlgoApi.Services.Ml;
@@ -12,11 +10,6 @@ public sealed class MlConnectorService(
 {
     private const string HttpClientName = "MlPolicy";
 
-    // Omit null hyperparameters when forwarding to Python so its non-nullable fields fall back to
-    // their own defaults instead of receiving an invalid null.
-    private static readonly JsonSerializerOptions TrainJsonOptions =
-        new(JsonSerializerDefaults.Web) { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
-
     public async Task<MlDecideResponse> DecideAsync(
         MlDecideRequest request,
         CancellationToken cancellationToken = default)
@@ -24,8 +17,8 @@ public sealed class MlConnectorService(
         using var httpClient = httpClientFactory.CreateClient(HttpClientName);
 
         logger.LogInformation(
-            "Sending decide request to ML service: symbol={Symbol}, interval={Interval}, model={ModelId}, position={Position}",
-            request.Symbol, request.Interval, request.ModelId, request.Position);
+            "Sending decide request to ML service: policy={PolicyId}, symbol={Symbol}, interval={Interval}, model={ModelId}, position={Position}",
+            request.MlPolicyId, request.Symbol, request.Interval, request.ModelId, request.Position);
 
         using var response = await httpClient.PostAsJsonAsync("/decide", request, cancellationToken);
 
@@ -49,10 +42,10 @@ public sealed class MlConnectorService(
         using var httpClient = httpClientFactory.CreateClient(HttpClientName);
 
         logger.LogInformation(
-            "Sending train request to ML service: symbol={Symbol}, interval={Interval}, model={ModelId}, from={FromDate}, to={ToDate}",
-            request.Symbol, request.Interval, request.ModelId, request.FromDate, request.ToDate);
+            "Sending train request to ML service: policy={PolicyId}, run={TrainingRunId}, symbol={Symbol}, interval={Interval}, model={ModelId}, from={FromDate}, to={ToDate}",
+            request.MlPolicyId, request.TrainingRunId, request.Symbol, request.Interval, request.ModelId, request.FromDate, request.ToDate);
 
-        using var response = await httpClient.PostAsJsonAsync("/train", request, TrainJsonOptions, cancellationToken);
+        using var response = await httpClient.PostAsJsonAsync("/train", request, cancellationToken);
 
         if (!response.IsSuccessStatusCode)
         {

@@ -127,8 +127,6 @@ builder.Services.AddHttpClient("MlPolicy", client =>
     client.BaseAddress = new Uri(baseUrl);
     client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
 });
-builder.Services.AddSingleton(new MlConnectorOptions(
-    ModelId: builder.Configuration["MlPolicy:ModelId"] ?? "ppo-v1"));
 builder.Services.AddScoped<IMlConnectorService, MlConnectorService>();
 builder.Services.AddScoped<IMlTrainingStreamService, MlTrainingStreamService>();
 
