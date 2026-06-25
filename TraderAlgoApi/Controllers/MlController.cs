@@ -1,4 +1,3 @@
-using System.Globalization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
@@ -19,49 +18,59 @@ public sealed class MlController(
 {
     [HttpPost("train")]
     public async Task<ActionResult<MlTrainStartedResponse>> Train(
-        [FromBody] MlTrainRequest request,
+        [FromBody] MlStartTrainingRequest request,
         CancellationToken cancellationToken)
     {
-        var symbol = await dbContext.Symbols
-            .FirstOrDefaultAsync(s => s.Code == request.Symbol, cancellationToken);
-        if (symbol is null)
-            return NotFound($"Symbol '{request.Symbol}' not found.");
+        var policy = await dbContext.MlPolicies
+            .Include(p => p.Model)
+            .Include(p => p.Symbol)
+            .Include(p => p.Interval)
+            .FirstOrDefaultAsync(p => p.Id == request.MlPolicyId, cancellationToken);
+        if (policy is null)
+            return NotFound($"Policy {request.MlPolicyId} not found.");
 
-        var interval = await dbContext.Intervals
-            .FirstOrDefaultAsync(i => i.Code == request.Interval, cancellationToken);
-        if (interval is null)
-            return NotFound($"Interval '{request.Interval}' not found.");
+        if (request.From > request.To)
+            return BadRequest("'from' must not be after 'to'.");
 
-        if (!TryParseDate(request.FromDate, out var from) || !TryParseDate(request.ToDate, out var to))
-            return BadRequest($"Could not parse date range '{request.FromDate}' .. '{request.ToDate}'.");
-
-        if (from >= to)
-            return BadRequest("'from_date' must be earlier than 'to_date'.");
+        // Date-only inputs: start the window at midnight and end it at 23:59 of the chosen day.
+        var from = new DateTimeOffset(request.From.Year, request.From.Month, request.From.Day, 0, 0, 0, TimeSpan.Zero);
+        var to = new DateTimeOffset(request.To.Year, request.To.Month, request.To.Day, 23, 59, 0, TimeSpan.Zero);
 
         var now = timeProvider.GetUtcNow();
 
         // Record the run up front so the client can poll/stream it and Python can call back on completion.
         var run = new MlTrainingRun
         {
-            ModelId        = request.ModelId,
-            SymbolId       = symbol.Id,
-            IntervalId     = interval.Id,
-            From           = from,
-            To             = to,
-            StartedAt      = now,
-            StatusEnum     = MlTrainingRunStatus.Pending,
-            TotalTimesteps = request.TotalTimesteps
+            MlPolicyId = policy.Id,
+            From       = from,
+            To         = to,
+            StartedAt  = now,
+            StatusEnum = MlTrainingRunStatus.Pending
         };
         dbContext.MlTrainingRuns.Add(run);
         await dbContext.SaveChangesAsync(cancellationToken);
 
-        // Forward to Python with the run id so its completion webhook can find this row.
-        var forwarded = request with
-        {
-            Symbol        = symbol.Code,
-            Interval      = interval.Code,
-            TrainingRunId = run.Id
-        };
+        // Build the Python training request from the policy's configuration.
+        var forwarded = new MlTrainRequest(
+            Symbol:        policy.Symbol.Code,
+            Interval:      policy.Interval.Code,
+            FromDate:      from.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+            ToDate:        to.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+            ModelId:       policy.Model.Name,
+            TrainingRunId: run.Id,
+            TotalTimesteps:                policy.TotalTimesteps,
+            InitialBalance:                policy.InitialBalance,
+            Quantity:                      policy.Quantity,
+            StopLoss:                      policy.StopLoss,
+            TakeProfit:                    policy.TakeProfit,
+            Breakeven:                     policy.Breakeven,
+            BreakevenStop:                 policy.BreakevenStop,
+            MaxCandlesPerTrade:            policy.MaxCandlesPerTrade,
+            DailyProfitTarget:             policy.DailyProfit,
+            DailyDrawdownLimit:            policy.DailyDrawdownLimit,
+            FeeRate:                       policy.Fee,
+            SlippageRate:                  policy.Slippage,
+            MaxTrailingDrawdownThreshold:  policy.MaxTrailingDrawdown);
 
         try
         {
@@ -80,10 +89,11 @@ public sealed class MlController(
 
         return Ok(new MlTrainStartedResponse(
             TrainingRunId: run.Id,
-            ModelId:       run.ModelId,
+            ModelId:       policy.Model.Name,
             Status:        run.StatusEnum,
-            Message:       $"Training run {run.Id} ('{run.ModelId}') started on " +
-                           $"{symbol.Code}/{interval.Code} ({request.FromDate} -> {request.ToDate})."));
+            Message:       $"Training run {run.Id} ('{policy.Model.Name}') started on " +
+                           $"{policy.Symbol.Code}/{policy.Interval.Code} " +
+                           $"({request.From:yyyy-MM-dd} -> {request.To:yyyy-MM-dd})."));
     }
 
     [HttpGet("training-runs")]
@@ -92,8 +102,9 @@ public sealed class MlController(
     {
         var runs = await dbContext.MlTrainingRuns
             .AsNoTracking()
-            .Include(r => r.Symbol)
-            .Include(r => r.Interval)
+            .Include(r => r.Policy).ThenInclude(p => p.Model)
+            .Include(r => r.Policy).ThenInclude(p => p.Symbol)
+            .Include(r => r.Policy).ThenInclude(p => p.Interval)
             .OrderByDescending(r => r.StartedAt)
             .ToListAsync(cancellationToken);
 
@@ -107,8 +118,9 @@ public sealed class MlController(
     {
         var run = await dbContext.MlTrainingRuns
             .AsNoTracking()
-            .Include(r => r.Symbol)
-            .Include(r => r.Interval)
+            .Include(r => r.Policy).ThenInclude(p => p.Model)
+            .Include(r => r.Policy).ThenInclude(p => p.Symbol)
+            .Include(r => r.Policy).ThenInclude(p => p.Interval)
             .FirstOrDefaultAsync(r => r.Id == id, cancellationToken);
 
         return run is null ? NotFound($"Training run {id} not found.") : Ok(ToDto(run));
@@ -243,25 +255,19 @@ public sealed class MlController(
 
     // -------------------------------------------------------------------------
 
-    private static bool TryParseDate(string value, out DateTimeOffset result) =>
-        DateTimeOffset.TryParse(
-            value,
-            CultureInfo.InvariantCulture,
-            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-            out result);
-
     private static MlTrainingRunResponse ToDto(MlTrainingRun r) =>
         new(
             Id:             r.Id,
-            ModelId:        r.ModelId,
-            SymbolCode:     r.Symbol.Code,
-            IntervalCode:   r.Interval.Code,
+            MlPolicyId:     r.MlPolicyId,
+            ModelId:        r.Policy.Model.Name,
+            SymbolCode:     r.Policy.Symbol.Code,
+            IntervalCode:   r.Policy.Interval.Code,
             From:           r.From.ToUnixTimeSeconds(),
             To:             r.To.ToUnixTimeSeconds(),
             StartedAt:      r.StartedAt.ToUnixTimeMilliseconds(),
             CompletedAt:    r.CompletedAt != null ? r.CompletedAt.Value.ToUnixTimeMilliseconds() : null,
             Status:         r.StatusEnum,
-            TotalTimesteps: r.TotalTimesteps,
+            TotalTimesteps: r.Policy.TotalTimesteps,
             FinalBalance:   r.FinalBalance,
             PnlPct:         r.PnlPct,
             NTrades:        r.NTrades,
