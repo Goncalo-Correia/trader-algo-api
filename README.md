@@ -37,7 +37,7 @@ to **Kronos** for AI candle forecasting and an **ML policy** sidecar for model-d
 Market data flows in from a single provider behind a common `IMarketDataProvider` abstraction
 (kept provider-neutral so additional providers can be added later):
 
-- **Binance** — crypto (e.g. `BTCUSDT`), 24/7 WebSocket stream.
+- **Binance** — crypto (e.g. `BTCUSDT`, `ETHUSDT`), 24/7 WebSocket stream.
 
 ```mermaid
 flowchart LR
@@ -356,6 +356,16 @@ so entry/hold choices and confidence can be visualised candle-by-candle.
 `GET /api/ml/training-runs/{id}/decisions` returns the same log as a single payload. Deleting a run
 also removes its decision log from the sidecar.
 
+**MLflow tracking.** `GET /api/ml/training-runs/{id}/tracking` returns read-only MLflow metadata,
+params, latest metrics, metric history, and a `rewardMetrics` dashboard linked by the MLflow param
+`training_run_id`. The dashboard groups reward-based model checks into performance, stability,
+learning quality, safety, baseline comparison, robustness, and reward integrity categories while
+preserving the raw MLflow metrics. Training-run list/detail responses include a compact `tracking`
+summary when MLflow data is available. Configure `Mlflow:TrackingUri` or the raw
+`MLFLOW_TRACKING_URI` environment variable with the same PostgreSQL MLflow tracking URI used by
+`trader-algo-ml`; the API converts `postgresql://...` MLflow URIs to Npgsql connection strings for
+read-only queries.
+
 **Inference.** `POST /api/ml/decide` fetches the latest candle+indicators and asks the sidecar for an
 entry action — this is what the live `MlPolicy` strategy and ML backtests call while flat.
 
@@ -398,7 +408,7 @@ REST base path `/api`. Enums (side, status, strategy, etc.) serialize as strings
 | **Backtests** | `POST/GET /backtests` · `GET/DELETE /backtests/{id}` |
 | **Trades** | `POST /trades` · `POST /trades/{id}/stop` · `PATCH /trades/{id}` · `GET /trades/account/{id}/active` · `/history` · `GET /trades/backtest/{id}` |
 | **ML policies** | `GET/POST /ml/policies` · `GET/PUT/DELETE /ml/policies/{id}` |
-| **ML training** | `POST /ml/train` · `POST /ml/decide` · `GET /ml/training-runs` · `GET/DELETE /ml/training-runs/{id}` · `GET /ml/training-runs/{id}/decisions` · `PATCH /ml/training-runs/{id}/complete` |
+| **ML training** | `POST /ml/train` · `POST /ml/decide` · `GET /ml/training-runs` · `GET/DELETE /ml/training-runs/{id}` · `GET /ml/training-runs/{id}/tracking` · `GET /ml/training-runs/{id}/decisions` · `PATCH /ml/training-runs/{id}/complete` |
 | **Rules** | `GET /rules/{sma\|rsi\|macd}/evaluate?symbol=&interval=` |
 | **Charts** | `GET /charts/candles?symbol=&interval=&lookback=` · `GET /charts/candles/indicators` · `GET /charts/candles/indicators/date-interval?from=&to=&symbol=&interval=` |
 | **Symbols / Intervals** | `GET /symbols` · `GET /intervals` |
@@ -431,6 +441,13 @@ Requires the **.NET 10 SDK** and a PostgreSQL database (Supabase or local).
    ```bash
    cd TraderAlgoApi
    dotnet user-secrets set "ConnectionStrings:Supabase" "Host=...;Database=postgres;Username=...;Password=...;SSL Mode=Require;Trust Server Certificate=true"
+   dotnet user-secrets set "Mlflow:TrackingUri" "postgresql://USER:PASSWORD@HOST:5432/postgres?sslmode=require"
+   ```
+
+   If the API runs in Docker, pass the MLflow tracking database through the container environment:
+
+   ```bash
+   MLFLOW_TRACKING_URI=postgresql://USER:PASSWORD@HOST:5432/postgres?sslmode=require
    ```
 
 2. Apply migrations and run:

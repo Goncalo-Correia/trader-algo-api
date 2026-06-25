@@ -13,6 +13,7 @@ namespace TraderAlgoApi.Controllers;
 public sealed class MlController(
     ApplicationDbContext dbContext,
     IMlConnectorService mlConnector,
+    IMlflowTrackingRepository mlflowTrackingRepository,
     TimeProvider timeProvider,
     ILogger<MlController> logger) : ControllerBase
 {
@@ -106,7 +107,11 @@ public sealed class MlController(
             .OrderByDescending(r => r.StartedAt)
             .ToListAsync(cancellationToken);
 
-        return Ok(runs.Select(ToDto).ToList());
+        var tracking = await mlflowTrackingRepository.GetTrackingSummariesAsync(
+            runs.Select(r => r.Id).ToArray(),
+            cancellationToken);
+
+        return Ok(runs.Select(r => ToDto(r, GetTrackingSummary(tracking, r.Id))).ToList());
     }
 
     [HttpGet("training-runs/{id:long}")]
@@ -120,7 +125,30 @@ public sealed class MlController(
             .Include(r => r.Policy).ThenInclude(p => p.Interval)
             .FirstOrDefaultAsync(r => r.Id == id, cancellationToken);
 
-        return run is null ? NotFound($"Training run {id} not found.") : Ok(ToDto(run));
+        if (run is null)
+            return NotFound($"Training run {id} not found.");
+
+        var tracking = await mlflowTrackingRepository.GetTrackingSummariesAsync([id], cancellationToken);
+        return Ok(ToDto(run, GetTrackingSummary(tracking, id)));
+    }
+
+    [HttpGet("training-runs/{id:long}/tracking")]
+    public async Task<ActionResult<MlflowTrainingTrackingResponse>> GetTrainingRunTracking(
+        long id,
+        CancellationToken cancellationToken)
+    {
+        var exists = await dbContext.MlTrainingRuns
+            .AsNoTracking()
+            .AnyAsync(r => r.Id == id, cancellationToken);
+        if (!exists)
+            return NotFound($"Training run {id} not found.");
+
+        var tracking = await mlflowTrackingRepository.GetTrackingAsync(
+            id,
+            includeMetricHistory: true,
+            cancellationToken);
+
+        return Ok(tracking);
     }
 
     /// <summary>
@@ -279,7 +307,9 @@ public sealed class MlController(
 
     // -------------------------------------------------------------------------
 
-    private static MlTrainingRunResponse ToDto(MlTrainingRun r) =>
+    private static MlTrainingRunResponse ToDto(
+        MlTrainingRun r,
+        MlflowTrainingTrackingSummaryDto tracking) =>
         new(
             Id:             r.Id,
             MlPolicyId:     r.MlPolicyId,
@@ -294,5 +324,13 @@ public sealed class MlController(
             FinalBalance:   r.FinalBalance,
             PnlPct:         r.PnlPct,
             NTrades:        r.NTrades,
-            RunId:          r.RunId);
+            RunId:          r.RunId,
+            Tracking:       tracking);
+
+    private static MlflowTrainingTrackingSummaryDto GetTrackingSummary(
+        IReadOnlyDictionary<long, MlflowTrainingTrackingSummaryDto> summaries,
+        long trainingRunId) =>
+        summaries.TryGetValue(trainingRunId, out var summary)
+            ? summary
+            : MlflowTrainingTrackingSummaryDto.Unavailable("Tracking data not available yet.");
 }

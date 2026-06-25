@@ -62,6 +62,18 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
                     IsDefault   = true,
                     ProviderId  = (int)Models.Enums.SymbolProvider.Binance,
                     CreatedAt   = new DateTimeOffset(2026, 4, 16, 0, 0, 0, TimeSpan.Zero)
+                },
+                new Symbol
+                {
+                    Id          = 3,
+                    Code        = "ETHUSDT",
+                    BaseAsset   = "ETH",
+                    QuoteAsset  = "USDT",
+                    DisplayName = "ETH/USDT",
+                    IsActive    = true,
+                    IsDefault   = false,
+                    ProviderId  = (int)Models.Enums.SymbolProvider.Binance,
+                    CreatedAt   = new DateTimeOffset(2026, 6, 25, 0, 0, 0, TimeSpan.Zero)
                 });
         });
 

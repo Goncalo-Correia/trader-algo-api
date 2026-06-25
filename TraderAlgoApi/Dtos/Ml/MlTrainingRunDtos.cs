@@ -33,7 +33,8 @@ public sealed record MlTrainingRunResponse(
     [property: JsonPropertyName("finalBalance")]   decimal? FinalBalance,
     [property: JsonPropertyName("pnlPct")]         decimal? PnlPct,
     [property: JsonPropertyName("nTrades")]        int? NTrades,
-    [property: JsonPropertyName("runId")]          string? RunId);
+    [property: JsonPropertyName("runId")]          string? RunId,
+    [property: JsonPropertyName("tracking")]       MlflowTrainingTrackingSummaryDto? Tracking = null);
 
 /// <summary>
 /// Webhook body the Python ML service PATCHes when a training run finishes (or fails).

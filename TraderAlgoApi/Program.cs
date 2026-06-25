@@ -126,8 +126,10 @@ builder.Services.AddHttpClient("MlPolicy", client =>
     client.BaseAddress = new Uri(baseUrl);
     client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
 });
+builder.Services.Configure<MlflowOptions>(builder.Configuration.GetSection("Mlflow"));
 builder.Services.AddScoped<IMlConnectorService, MlConnectorService>();
 builder.Services.AddScoped<IMlTrainingStreamService, MlTrainingStreamService>();
+builder.Services.AddScoped<IMlflowTrackingRepository, MlflowTrackingRepository>();
 
 var app = builder.Build();
 
