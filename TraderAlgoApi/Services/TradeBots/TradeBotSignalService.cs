@@ -121,7 +121,7 @@ public sealed class TradeBotSignalService(
             MlPolicyId:    policy.Id,
             Symbol:       tradeBot.Symbol.Code,
             Interval:     tradeBot.Interval.Code,
-            ModelId:      policy.Model.Name,
+            ModelId:      policy.Id.ToString(),
             Candle: new MlCandleFeatures(
                 Open:           context.CurrentOpen,
                 High:           context.CurrentHigh,
@@ -169,7 +169,7 @@ public sealed class TradeBotSignalService(
 
     private async Task<MlPolicy?> LoadPolicyAsync(TradeBot tradeBot, CancellationToken cancellationToken)
     {
-        if (tradeBot.MlPolicy is { Model: not null })
+        if (tradeBot.MlPolicy is not null)
             return tradeBot.MlPolicy;
 
         if (tradeBot.MlPolicyId is not long policyId)
@@ -177,7 +177,6 @@ public sealed class TradeBotSignalService(
 
         return await dbContext.MlPolicies
             .AsNoTracking()
-            .Include(p => p.Model)
             .Include(p => p.Symbol)
             .Include(p => p.Interval)
             .FirstOrDefaultAsync(p => p.Id == policyId, cancellationToken);

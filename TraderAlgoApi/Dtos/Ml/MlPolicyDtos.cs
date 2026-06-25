@@ -4,7 +4,6 @@ namespace TraderAlgoApi.Dtos.Ml;
 
 /// <summary>Create/update body for a training policy. Symbol/interval are codes; model is an id.</summary>
 public sealed record MlPolicyRequest(
-    [property: JsonPropertyName("modelId")]   int ModelId,
     [property: JsonPropertyName("symbol")]    string Symbol,
     [property: JsonPropertyName("interval")]  string Interval,
     [property: JsonPropertyName("totalTimesteps")]      int TotalTimesteps,
@@ -23,8 +22,6 @@ public sealed record MlPolicyRequest(
 
 public sealed record MlPolicyResponse(
     [property: JsonPropertyName("id")]            long Id,
-    [property: JsonPropertyName("modelId")]       int ModelId,
-    [property: JsonPropertyName("modelName")]     string ModelName,
     [property: JsonPropertyName("symbolId")]      int SymbolId,
     [property: JsonPropertyName("symbolCode")]    string SymbolCode,
     [property: JsonPropertyName("intervalId")]    int IntervalId,
@@ -44,7 +41,3 @@ public sealed record MlPolicyResponse(
     [property: JsonPropertyName("maxTrailingDrawdown")] decimal MaxTrailingDrawdown,
     [property: JsonPropertyName("createdAt")]           long CreatedAt,
     [property: JsonPropertyName("trainingRunCount")]    int TrainingRunCount);
-
-public sealed record MlModelResponse(
-    [property: JsonPropertyName("id")]   int Id,
-    [property: JsonPropertyName("name")] string Name);

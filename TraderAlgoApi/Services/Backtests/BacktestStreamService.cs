@@ -63,7 +63,6 @@ public sealed class BacktestStreamService(
             .Include(b => b.Interval)
             .Include(b => b.TradeBot)
                 .ThenInclude(tb => tb!.MlPolicy)
-                    .ThenInclude(p => p!.Model)
             .FirstOrDefaultAsync(b => b.Id == backtestId, cancellationToken);
 
         if (backtest is null)
@@ -511,7 +510,7 @@ public sealed class BacktestStreamService(
             MlPolicyId: policy.Id,
             Symbol:   backtest.Symbol.Code,
             Interval: backtest.Interval.Code,
-            ModelId:  policy.Model.Name,
+            ModelId:  policy.Id.ToString(),
             Candle: new MlCandleFeatures(
                 Open:           context.CurrentOpen,
                 High:           context.CurrentHigh,

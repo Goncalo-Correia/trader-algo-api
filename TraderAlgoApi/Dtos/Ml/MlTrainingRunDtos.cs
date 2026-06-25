@@ -15,7 +15,6 @@ public sealed record MlStartTrainingRequest(
 /// <summary>Returned to the client when a training run is kicked off.</summary>
 public sealed record MlTrainStartedResponse(
     [property: JsonPropertyName("trainingRunId")] long TrainingRunId,
-    [property: JsonPropertyName("modelId")]       string ModelId,
     [property: JsonPropertyName("status")]        MlTrainingRunStatus Status,
     [property: JsonPropertyName("message")]       string Message);
 
@@ -23,7 +22,6 @@ public sealed record MlTrainStartedResponse(
 public sealed record MlTrainingRunResponse(
     [property: JsonPropertyName("id")]             long Id,
     [property: JsonPropertyName("mlPolicyId")]     long MlPolicyId,
-    [property: JsonPropertyName("modelId")]        string ModelId,
     [property: JsonPropertyName("symbolCode")]     string SymbolCode,
     [property: JsonPropertyName("intervalCode")]   string IntervalCode,
     [property: JsonPropertyName("from")]           long From,

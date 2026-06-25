@@ -16,11 +16,6 @@ public sealed class MlPolicy
     [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
     public long Id { get; set; }
 
-    public int ModelId { get; set; }
-
-    [ForeignKey(nameof(ModelId))]
-    public MlModel Model { get; set; } = null!;
-
     public int SymbolId { get; set; }
 
     [ForeignKey(nameof(SymbolId))]

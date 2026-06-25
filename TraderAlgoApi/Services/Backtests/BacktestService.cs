@@ -248,7 +248,6 @@ public sealed class BacktestService(
 
         return await dbContext.TradeBots
             .Include(b => b.TradingAccount)
-            .Include(b => b.MlPolicy).ThenInclude(p => p!.Model)
             .Include(b => b.MlPolicy).ThenInclude(p => p!.Symbol)
             .Include(b => b.MlPolicy).ThenInclude(p => p!.Interval)
             .Where(b => b.IsEnabled &&
@@ -282,7 +281,6 @@ public sealed class BacktestService(
             ?? throw new ArgumentException("'mlPolicyId' is required for the ML Policy strategy.");
 
         var policy = await dbContext.MlPolicies
-            .Include(p => p.Model)
             .Include(p => p.Symbol)
             .Include(p => p.Interval)
             .FirstOrDefaultAsync(p => p.Id == policyId, cancellationToken)

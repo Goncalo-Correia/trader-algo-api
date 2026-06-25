@@ -261,7 +261,6 @@ public sealed class TradeBotService(
 
     private async Task<MlPolicy> LoadMlPolicyAsync(long policyId, CancellationToken cancellationToken) =>
         await dbContext.MlPolicies
-            .Include(p => p.Model)
             .Include(p => p.Symbol)
             .Include(p => p.Interval)
             .FirstOrDefaultAsync(p => p.Id == policyId, cancellationToken)
