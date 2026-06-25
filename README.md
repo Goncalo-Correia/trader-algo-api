@@ -93,6 +93,8 @@ index). Indicators live in one-to-one side tables (`SimpleMovingAverage`, `Relat
 
 **Historical (REST).** `GET /api/charts/candles` and `GET /api/charts/candles/indicators` return the
 last `lookback` candles for a symbol/interval straight from the database.
+`GET /api/charts/candles/indicators/date-interval` returns the same indicator-enriched candles for an
+explicit `from`/`to` date range instead of a lookback (the window spans `from` 00:00 to `to` 23:59 UTC).
 
 **Live (WebSocket).** Two endpoints stream the **forming** candle:
 
@@ -399,7 +401,7 @@ REST base path `/api`. Enums (side, status, strategy, etc.) serialize as strings
 | **ML policies** | `GET/POST /ml/policies` · `GET/PUT/DELETE /ml/policies/{id}` |
 | **ML training** | `POST /ml/train` · `POST /ml/decide` · `GET /ml/training-runs` · `GET/DELETE /ml/training-runs/{id}` · `GET /ml/training-runs/{id}/decisions` · `PATCH /ml/training-runs/{id}/complete` |
 | **Rules** | `GET /rules/{sma\|rsi\|macd}/evaluate?symbol=&interval=` |
-| **Charts** | `GET /charts/candles?symbol=&interval=&lookback=` · `GET /charts/candles/indicators` |
+| **Charts** | `GET /charts/candles?symbol=&interval=&lookback=` · `GET /charts/candles/indicators` · `GET /charts/candles/indicators/date-interval?from=&to=&symbol=&interval=` |
 | **Symbols / Intervals** | `GET /symbols` · `GET /intervals` |
 | **Data collector** | `POST /data-collector/{symbol}/{interval}` · `POST /data-collector/full-sync` |
 | **Kronos** | `GET /kronos/{model}/{mode}?symbol=&interval=` (candle forecasts) |
