@@ -1,7 +1,7 @@
 # TraderAlgoAPI
 
 ASP.NET Core backend for algorithmic trading. It ingests live and historical market data
-(Binance crypto + Alpaca equities), computes indicators, runs strategy-driven trade bots and
+(Binance crypto), computes indicators, runs strategy-driven trade bots and
 backtests, and streams everything to an Angular frontend over WebSockets. It can also call out
 to **Kronos** for AI candle forecasting and an **ML policy** sidecar for model-driven entries.
 
@@ -34,15 +34,14 @@ to **Kronos** for AI candle forecasting and an **ML policy** sidecar for model-d
 | Forecast service (optional) | FastAPI + Kronos | Modal.com |
 | ML policy service (optional) | FastAPI + PPO (stable-baselines3) | local / container |
 
-Market data flows in from two providers behind a common `IMarketDataProvider` abstraction:
+Market data flows in from a single provider behind a common `IMarketDataProvider` abstraction
+(kept provider-neutral so additional providers can be added later):
 
 - **Binance** — crypto (e.g. `BTCUSDT`), 24/7 WebSocket stream.
-- **Alpaca** — US equities (e.g. `SPY`), streamed during market hours, polled for higher intervals.
 
 ```mermaid
 flowchart LR
   Binance[(Binance)] --> Ingest
-  Alpaca[(Alpaca)] --> Ingest
   Ingest[Live ingest] -->|ticks| PriceFeed((PriceFeed))
   Ingest -->|closed candles| ClosedFeed((ClosedCandleFeed))
   Ingest --> DB[(PostgreSQL)]
@@ -403,7 +402,7 @@ REST base path `/api`. Enums (side, status, strategy, etc.) serialize as strings
 | **Rules** | `GET /rules/{sma\|rsi\|macd}/evaluate?symbol=&interval=` |
 | **Charts** | `GET /charts/candles?symbol=&interval=&lookback=` · `GET /charts/candles/indicators` · `GET /charts/candles/indicators/date-interval?from=&to=&symbol=&interval=` |
 | **Symbols / Intervals** | `GET /symbols` · `GET /intervals` |
-| **Data collector** | `POST /data-collector/{symbol}/{interval}` · `POST /data-collector/full-sync` |
+| **Data collector** | `POST /binance/data-collector/{symbol}/{interval}` · `POST /binance/data-collector/partial-sync` · `POST /binance/data-collector/full-sync` |
 | **Kronos** | `GET /kronos/{model}/{mode}?symbol=&interval=` (candle forecasts) |
 | **Health** | `GET /health` (checks DB connectivity) |
 
@@ -426,14 +425,12 @@ Errors return RFC 7807 ProblemDetails: `400` invalid input, `404` not found, `40
 
 Requires the **.NET 10 SDK** and a PostgreSQL database (Supabase or local).
 
-1. Set secrets (the connection string and provider keys are **not** committed — `appsettings.json`
-   holds placeholders only):
+1. Set secrets (the connection string is **not** committed — `appsettings.json` holds a placeholder
+   only). Binance market data uses public endpoints, so no provider keys are required:
 
    ```bash
    cd TraderAlgoApi
    dotnet user-secrets set "ConnectionStrings:Supabase" "Host=...;Database=postgres;Username=...;Password=...;SSL Mode=Require;Trust Server Certificate=true"
-   dotnet user-secrets set "Alpaca:ApiKey" "<key>"
-   dotnet user-secrets set "Alpaca:SecretKey" "<secret>"
    ```
 
 2. Apply migrations and run:

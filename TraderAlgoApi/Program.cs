@@ -101,13 +101,12 @@ builder.Services.AddScoped<IIndicatorSyncService, IndicatorSyncService>();
 
 // ── Data collection ───────────────────────────────────────────────────────────
 builder.Services.AddScoped<IBinanceDataCollectorService, BinanceDataCollectorService>();
-builder.Services.AddScoped<IAlpacaDataCollectorService, AlpacaDataCollectorService>();
 builder.Services.AddHostedService<DataCollectorTimer>();
 
 // ── Live charts ───────────────────────────────────────────────────────────────
 builder.Services.AddScoped<ILiveChartDataService, LiveChartDataService>();
 
-// ── Market data providers (Binance + Alpaca + factory + streaming services) ────
+// ── Market data providers (Binance + factory + streaming service) ──────────────
 builder.Services.AddMarketDataProviders(builder.Configuration);
 
 // ── Kronos ────────────────────────────────────────────────────────────────────

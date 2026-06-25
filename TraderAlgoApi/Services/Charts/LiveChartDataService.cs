@@ -11,8 +11,7 @@ namespace TraderAlgoApi.Services.Charts;
 
 /// <summary>
 /// Streams live candle data to frontend WebSocket clients by subscribing to the
-/// shared PriceFeed and ClosedCandleFeed singletons.  Works for both Binance and
-/// Alpaca symbols without any provider-specific logic.
+/// shared PriceFeed and ClosedCandleFeed singletons, without any provider-specific logic.
 /// </summary>
 public sealed class LiveChartDataService(
     PriceFeed                  priceFeed,

@@ -1,5 +1,4 @@
 using TraderAlgoApi.Models.Enums;
-using TraderAlgoApi.Services.MarketData.Alpaca;
 
 namespace TraderAlgoApi.Services.MarketData;
 
@@ -8,13 +7,11 @@ namespace TraderAlgoApi.Services.MarketData;
 /// Binance is injected via the IBinanceMarketDataService (which also implements IMarketDataProvider).
 /// </summary>
 public sealed class MarketDataProviderFactory(
-    IMarketDataProvider      binanceProvider,
-    AlpacaMarketDataProvider alpacaProvider) : IMarketDataProviderFactory
+    IMarketDataProvider binanceProvider) : IMarketDataProviderFactory
 {
     public IMarketDataProvider GetProvider(SymbolProvider provider) => provider switch
     {
         SymbolProvider.Binance => binanceProvider,
-        SymbolProvider.Alpaca  => alpacaProvider,
         _                      => throw new ArgumentOutOfRangeException(nameof(provider), provider, null)
     };
 }
