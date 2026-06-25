@@ -24,6 +24,11 @@ public sealed class TradeBot
     [ForeignKey(nameof(TradingStrategyId))]
     public TradingStrategy TradingStrategy { get; set; } = null!;
 
+    public long? MlPolicyId { get; set; }
+
+    [ForeignKey(nameof(MlPolicyId))]
+    public MlPolicy? MlPolicy { get; set; }
+
     /// <summary>
     /// Strongly-typed view over <see cref="TradingStrategyId"/> (lookup IDs match the enum values).
     /// The single home for the int↔enum mapping; not mapped and not usable in EF LINQ queries.

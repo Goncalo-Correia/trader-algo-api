@@ -28,9 +28,15 @@ public sealed class BacktestService(
 
         var templateBot = await LoadTemplateBotAsync(request, cancellationToken);
         var tradingStrategyId = request.TradingStrategyId ?? templateBot.TradingStrategyId;
-        var quantity = request.Quantity ?? templateBot.Quantity;
-        var stopLoss = request.StopLoss ?? templateBot.StopLoss;
-        var takeProfit = request.TakeProfit ?? templateBot.TakeProfit;
+        var mlPolicy = await ResolveMlPolicyAsync(request, templateBot, tradingStrategyId, symbol.Code, interval.Code, cancellationToken);
+        var quantity = mlPolicy?.Quantity ?? request.Quantity ?? templateBot.Quantity;
+        var stopLoss = mlPolicy?.StopLoss ?? request.StopLoss ?? templateBot.StopLoss;
+        var takeProfit = mlPolicy?.TakeProfit ?? request.TakeProfit ?? templateBot.TakeProfit;
+        var breakeven = mlPolicy?.Breakeven ?? request.Breakeven;
+        var breakevenStop = mlPolicy?.BreakevenStop ?? request.BreakevenStop;
+        var fee = mlPolicy?.Fee ?? request.Fee;
+        var dailyProfitGoal = mlPolicy?.DailyProfit ?? request.DailyProfitGoal;
+        var maxCandlesPerTrade = mlPolicy?.MaxCandlesPerTrade ?? request.MaxCandlesPerTrade;
 
         if (quantity <= 0)
             throw new ArgumentException("'quantity' must be greater than zero.");
@@ -65,19 +71,20 @@ public sealed class BacktestService(
         {
             BacktestId         = backtest.Id,
             TradingStrategyId  = tradingStrategyId,
+            MlPolicyId         = mlPolicy?.Id,
             SymbolId           = symbol.Id,
             IntervalId         = interval.Id,
             IsEnabled          = true,
             Quantity           = quantity,
             StopLoss           = stopLoss,
             TakeProfit         = takeProfit,
-            Breakeven          = request.Breakeven,
-            BreakevenStop      = request.BreakevenStop,
-            Fee                = request.Fee,
+            Breakeven          = breakeven,
+            BreakevenStop      = breakevenStop,
+            Fee                = fee,
             IsNySessionOnly    = request.IsNySessionOnly,
-            DailyProfitGoal    = request.DailyProfitGoal,
+            DailyProfitGoal    = dailyProfitGoal,
             MaxLossesPerDay    = request.MaxLossesPerDay,
-            MaxCandlesPerTrade = request.MaxCandlesPerTrade,
+            MaxCandlesPerTrade = maxCandlesPerTrade,
             CreatedAt          = now,
             UpdatedAt          = now
         };
@@ -88,6 +95,7 @@ public sealed class BacktestService(
         backtest.TradeBotId = tradeBot.Id;
         backtest.TradeBot = tradeBot;
         tradeBot.TradingStrategy = strategy;
+        tradeBot.MlPolicy = mlPolicy;
         await dbContext.SaveChangesAsync(cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);
@@ -225,12 +233,14 @@ public sealed class BacktestService(
         CreateBacktestRequestDto request,
         CancellationToken cancellationToken)
     {
-        if (request.TradingStrategyId.HasValue && request.Quantity.HasValue)
+        if (request.TradingStrategyId.HasValue &&
+            (request.Quantity.HasValue || request.TradingStrategyId.Value == (int)TradingStrategy.MlPolicy))
         {
             return new TradeBot
             {
                 TradingStrategyId = request.TradingStrategyId.Value,
-                Quantity = request.Quantity.Value,
+                MlPolicyId = request.MlPolicyId,
+                Quantity = request.Quantity ?? 0m,
                 StopLoss = request.StopLoss,
                 TakeProfit = request.TakeProfit
             };
@@ -238,6 +248,9 @@ public sealed class BacktestService(
 
         return await dbContext.TradeBots
             .Include(b => b.TradingAccount)
+            .Include(b => b.MlPolicy).ThenInclude(p => p!.Model)
+            .Include(b => b.MlPolicy).ThenInclude(p => p!.Symbol)
+            .Include(b => b.MlPolicy).ThenInclude(p => p!.Interval)
             .Where(b => b.IsEnabled &&
                         b.BacktestId == null &&
                         b.TradingAccountId != null &&
@@ -247,6 +260,42 @@ public sealed class BacktestService(
             .FirstOrDefaultAsync(cancellationToken)
             ?? throw new InvalidOperationException(
                 "Provide tradingStrategy and quantity, or enable an account tradebot to use as the backtest template.");
+    }
+
+    private async Task<MlPolicy?> ResolveMlPolicyAsync(
+        CreateBacktestRequestDto request,
+        TradeBot templateBot,
+        int tradingStrategyId,
+        string symbolCode,
+        string intervalCode,
+        CancellationToken cancellationToken)
+    {
+        if (tradingStrategyId != (int)TradingStrategy.MlPolicy)
+        {
+            if (request.MlPolicyId.HasValue)
+                throw new ArgumentException("'mlPolicyId' is only valid for the ML Policy strategy.");
+
+            return null;
+        }
+
+        var policyId = request.MlPolicyId ?? templateBot.MlPolicyId
+            ?? throw new ArgumentException("'mlPolicyId' is required for the ML Policy strategy.");
+
+        var policy = await dbContext.MlPolicies
+            .Include(p => p.Model)
+            .Include(p => p.Symbol)
+            .Include(p => p.Interval)
+            .FirstOrDefaultAsync(p => p.Id == policyId, cancellationToken)
+            ?? throw new ArgumentException($"ML policy {policyId} not found.");
+
+        if (!string.Equals(policy.Symbol.Code, symbolCode, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(policy.Interval.Code, intervalCode, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                $"ML policy {policy.Id} is configured for {policy.Symbol.Code}/{policy.Interval.Code}; the backtest must use the same symbol and interval.");
+        }
+
+        return policy;
     }
 
     private static BacktestSummaryResponseDto ToSummaryDto(

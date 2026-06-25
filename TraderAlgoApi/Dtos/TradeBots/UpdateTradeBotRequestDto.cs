@@ -17,4 +17,5 @@ public sealed record UpdateTradeBotRequestDto(
     decimal? DailyProfitGoal = null,
     int? MaxLossesPerDay = null,
     int? MaxCandlesPerTrade = null,
-    decimal Fee = 0);
+    decimal Fee = 0,
+    long? MlPolicyId = null);

@@ -24,7 +24,6 @@ public sealed class BacktestStreamService(
     MacdTradingRule macdTradingRule,
     SmaMacdTradingRule smaMacdTradingRule,
     IMlConnectorService mlConnector,
-    MlConnectorOptions mlOptions,
     TimeProvider timeProvider,
     ILogger<BacktestStreamService> logger) : IBacktestStreamService
 {
@@ -63,6 +62,8 @@ public sealed class BacktestStreamService(
             .Include(b => b.Symbol)
             .Include(b => b.Interval)
             .Include(b => b.TradeBot)
+                .ThenInclude(tb => tb!.MlPolicy)
+                    .ThenInclude(p => p!.Model)
             .FirstOrDefaultAsync(b => b.Id == backtestId, cancellationToken);
 
         if (backtest is null)
@@ -148,6 +149,8 @@ public sealed class BacktestStreamService(
     {
         var bot = backtest.TradeBot!;
         var rule = SelectRule(bot.TradingStrategyId);
+        if ((TradingStrategy)bot.TradingStrategyId == TradingStrategy.MlPolicy && bot.MlPolicy is null)
+            throw new InvalidOperationException($"Backtest {backtest.Id} uses ML Policy but its tradebot has no linked ML policy.");
 
         var rangeCandles = await dbContext.KlineData
             .AsNoTracking()
@@ -203,6 +206,17 @@ public sealed class BacktestStreamService(
             .ToDictionary(
                 g => g.Key,
                 g => (Pnl: g.Sum(t => t.Pnl ?? 0m), Losses: g.Count(t => (t.Pnl ?? 0m) < 0)));
+        var closedTradeHistory = closedTrades
+            .OrderBy(t => t.ClosedAt ?? t.CreatedAt)
+            .ToList();
+        var lastClosedTrade = closedTradeHistory.LastOrDefault(t => t.ClosedAt.HasValue);
+        int? lastClosedCandleIndex = null;
+        if (lastClosedTrade?.ClosedAt is DateTimeOffset lastClosedAt)
+        {
+            var index = combined.FindLastIndex(k => k.OpenTime <= lastClosedAt);
+            if (index >= 0)
+                lastClosedCandleIndex = index;
+        }
 
         // Skip already-emitted candles; always need at least 2 items before current.
         var startIndex = Math.Max(2, priorCandles.Count + backtest.CandleCount);
@@ -272,6 +286,8 @@ public sealed class BacktestStreamService(
                         ToTradeDto(openTrade, symbolCode, intervalCode), cancellationToken);
 
                     ApplyDailyStat(dailyStats, openTrade);
+                    closedTradeHistory.Add(openTrade);
+                    lastClosedCandleIndex = i;
                     openTrade = null;
                     openTradeCandles = 0;
                 }
@@ -290,6 +306,8 @@ public sealed class BacktestStreamService(
                     ToTradeDto(openTrade, symbolCode, intervalCode), cancellationToken);
 
                 ApplyDailyStat(dailyStats, openTrade);
+                closedTradeHistory.Add(openTrade);
+                lastClosedCandleIndex = i;
                 openTrade = null;
                 openTradeCandles = 0;
             }
@@ -325,7 +343,17 @@ public sealed class BacktestStreamService(
                 else
                 {
                     // MlPolicy: ask the sidecar for a decision
-                    side = await DecideViaMlAsync(backtest, context, current, cancellationToken);
+                    side = await DecideViaMlAsync(
+                        backtest,
+                        bot,
+                        context,
+                        current,
+                        balance,
+                        dailyStats,
+                        closedTradeHistory,
+                        lastClosedCandleIndex,
+                        i,
+                        cancellationToken);
                 }
 
                 if (side.HasValue)
@@ -412,6 +440,40 @@ public sealed class BacktestStreamService(
             stats.Losses + ((closedTrade.Pnl ?? 0m) < 0 ? 1 : 0));
     }
 
+    private static (int Wins, int Losses) CountStreaks(IReadOnlyList<Trade> closedTrades)
+    {
+        if (closedTrades.Count == 0 || closedTrades[^1].Pnl is null or 0m)
+            return (0, 0);
+
+        var count = 0;
+        var winning = closedTrades[^1].Pnl > 0m;
+        for (var i = closedTrades.Count - 1; i >= 0; i--)
+        {
+            var pnl = closedTrades[i].Pnl;
+            if (pnl is null)
+                break;
+
+            if (winning && pnl > 0m)
+                count++;
+            else if (!winning && pnl < 0m)
+                count++;
+            else
+                break;
+        }
+
+        return winning ? (count, 0) : (0, count);
+    }
+
+    private static string CloseReasonName(Trade? trade) =>
+        trade?.CloseReasonId switch
+        {
+            var id when id == (int)TradeCloseReason.StopLoss => "stop_loss",
+            var id when id == (int)TradeCloseReason.TakeProfit => "take_profit",
+            var id when id == (int)TradeCloseReason.BotSignal => "bot_signal",
+            var id when id == (int)TradeCloseReason.Manual => "manual",
+            _ => string.Empty
+        };
+
     private static async Task DisableLinkedTradeBotAsync(ApplicationDbContext dbContext, long backtestId)
     {
         await dbContext.TradeBots
@@ -423,14 +485,33 @@ public sealed class BacktestStreamService(
 
     private async Task<TradeSide?> DecideViaMlAsync(
         Backtest backtest,
+        TradeBot bot,
         TradingRuleContext context,
         KlineData current,
+        decimal balance,
+        IReadOnlyDictionary<DateOnly, (decimal Pnl, int Losses)> dailyStats,
+        IReadOnlyList<Trade> closedTradeHistory,
+        int? lastClosedCandleIndex,
+        int currentCandleIndex,
         CancellationToken cancellationToken)
     {
+        var policy = bot.MlPolicy
+            ?? throw new InvalidOperationException($"Tradebot {bot.Id} uses ML Policy but has no linked ML policy.");
+
+        var day = BacktestSimulationEngine.EasternDay(current.OpenTime);
+        dailyStats.TryGetValue(day, out var todayStats);
+        var currentDailyDrawdown = Math.Max(0m, -todayStats.Pnl);
+        var (winsInRow, lossesInRow) = CountStreaks(closedTradeHistory);
+        var lastTrade = closedTradeHistory.LastOrDefault(t => t.ClosedAt.HasValue);
+        var candlesSinceLastTradeClosed = lastClosedCandleIndex.HasValue
+            ? currentCandleIndex - lastClosedCandleIndex.Value
+            : 0;
+
         var request = new MlDecideRequest(
+            MlPolicyId: policy.Id,
             Symbol:   backtest.Symbol.Code,
             Interval: backtest.Interval.Code,
-            ModelId:  mlOptions.ModelId,
+            ModelId:  policy.Model.Name,
             Candle: new MlCandleFeatures(
                 Open:           context.CurrentOpen,
                 High:           context.CurrentHigh,
@@ -446,7 +527,25 @@ public sealed class BacktestStreamService(
                 SignalLine:     context.CurrentSignalLine,
                 Histogram:      context.CurrentHistogram),
             Position:      0,
-            CandlesHeld:   0,
+            InitialAccountBalance: backtest.InitialBalance,
+            CurrentAccountBalance: balance,
+            CurrentDailyPnl: todayStats.Pnl,
+            CurrentDailyDrawdown: currentDailyDrawdown,
+            WinsInRow: winsInRow,
+            LossesInRow: lossesInRow,
+            TradesTakenToday: closedTradeHistory.Count(
+                t => t.OpenedAt.HasValue && BacktestSimulationEngine.EasternDay(t.OpenedAt.Value) == day),
+            DailyProfitTargetReached: policy.DailyProfit > 0m && todayStats.Pnl >= policy.DailyProfit,
+            DailyDrawdownReached: policy.DailyDrawdownLimit > 0m && currentDailyDrawdown >= policy.DailyDrawdownLimit,
+            LastTradePnl: lastTrade?.Pnl ?? 0m,
+            LastTradeCloseReason: CloseReasonName(lastTrade),
+            CandlesSinceLastTradeClosed: candlesSinceLastTradeClosed,
+            ConfiguredStopLoss: policy.StopLoss,
+            ConfiguredTakeProfit: policy.TakeProfit,
+            ConfiguredBreakeven: policy.Breakeven,
+            ConfiguredBreakevenStop: policy.BreakevenStop,
+            ConfiguredMaxCandlesPerTrade: policy.MaxCandlesPerTrade,
+            FeeRate: policy.Fee,
             UnrealizedPnl: 0m);
 
         var response = await mlConnector.DecideAsync(request, cancellationToken);

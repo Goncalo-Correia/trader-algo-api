@@ -40,35 +40,37 @@ public sealed class MlPolicy
     public decimal Quantity { get; set; }
 
     [Precision(28, 10)]
-    public decimal? TakeProfit { get; set; }
+    public decimal TakeProfit { get; set; }
 
     [Precision(28, 10)]
-    public decimal? StopLoss { get; set; }
+    public decimal StopLoss { get; set; }
 
     [Precision(28, 10)]
-    public decimal? Breakeven { get; set; }
+    public decimal Breakeven { get; set; }
 
     [Precision(28, 10)]
-    public decimal? BreakevenStop { get; set; }
+    public decimal BreakevenStop { get; set; }
 
     [Precision(28, 10)]
-    public decimal? Fee { get; set; }
+    public decimal Fee { get; set; }
 
     [Precision(28, 10)]
-    public decimal? Slippage { get; set; }
+    public decimal Slippage { get; set; }
 
     [Precision(28, 10)]
-    public decimal? DailyProfit { get; set; }
+    public decimal DailyProfit { get; set; }
 
     [Precision(28, 10)]
-    public decimal? DailyDrawdownLimit { get; set; }
+    public decimal DailyDrawdownLimit { get; set; }
 
-    public int? MaxCandlesPerTrade { get; set; }
+    public int MaxCandlesPerTrade { get; set; }
 
     [Precision(28, 10)]
-    public decimal? MaxTrailingDrawdown { get; set; }
+    public decimal MaxTrailingDrawdown { get; set; }
 
     public DateTimeOffset CreatedAt { get; set; }
 
     public ICollection<MlTrainingRun> TrainingRuns { get; set; } = [];
+
+    public ICollection<TradeBot> TradeBots { get; set; } = [];
 }

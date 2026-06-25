@@ -52,12 +52,13 @@ public sealed class MlController(
 
         // Build the Python training request from the policy's configuration.
         var forwarded = new MlTrainRequest(
+            MlPolicyId:    policy.Id,
+            TrainingRunId: run.Id,
             Symbol:        policy.Symbol.Code,
             Interval:      policy.Interval.Code,
             FromDate:      from.ToString("yyyy-MM-ddTHH:mm:ssZ"),
             ToDate:        to.ToString("yyyy-MM-ddTHH:mm:ssZ"),
             ModelId:       policy.Model.Name,
-            TrainingRunId: run.Id,
             TotalTimesteps:                policy.TotalTimesteps,
             InitialBalance:                policy.InitialBalance,
             Quantity:                      policy.Quantity,
@@ -188,19 +189,29 @@ public sealed class MlController(
         [FromBody] MlDecideQueryRequest request,
         CancellationToken cancellationToken)
     {
+        var policy = await dbContext.MlPolicies
+            .AsNoTracking()
+            .Include(p => p.Model)
+            .Include(p => p.Symbol)
+            .Include(p => p.Interval)
+            .FirstOrDefaultAsync(p => p.Id == request.MlPolicyId, cancellationToken);
+        if (policy is null)
+            return NotFound($"Policy {request.MlPolicyId} not found.");
+
         var symbolCode = string.IsNullOrWhiteSpace(request.Symbol)
-            ? await dbContext.Symbols
-                .Where(s => s.IsDefault)
-                .Select(s => s.Code)
-                .FirstOrDefaultAsync(cancellationToken) ?? string.Empty
+            ? policy.Symbol.Code
             : request.Symbol;
 
         var intervalCode = string.IsNullOrWhiteSpace(request.Interval)
-            ? await dbContext.Intervals
-                .Where(i => i.IsDefault)
-                .Select(i => i.Code)
-                .FirstOrDefaultAsync(cancellationToken) ?? string.Empty
+            ? policy.Interval.Code
             : request.Interval;
+
+        if (!string.Equals(symbolCode, policy.Symbol.Code, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(intervalCode, policy.Interval.Code, StringComparison.OrdinalIgnoreCase))
+        {
+            return BadRequest(
+                $"Policy {policy.Id} is configured for {policy.Symbol.Code}/{policy.Interval.Code}; use the same symbol and interval.");
+        }
 
         var kline = await dbContext.KlineData
             .AsNoTracking()
@@ -228,9 +239,10 @@ public sealed class MlController(
             return NotFound($"No candle data found for {symbolCode}/{intervalCode}.");
 
         var decideRequest = new MlDecideRequest(
+            MlPolicyId:   policy.Id,
             Symbol:       symbolCode,
             Interval:     intervalCode,
-            ModelId:      request.ModelId ?? "ppo-v1",
+            ModelId:      request.ModelId ?? policy.Model.Name,
             Candle: new MlCandleFeatures(
                 Open:           kline.Open,
                 High:           kline.High,
@@ -246,7 +258,24 @@ public sealed class MlController(
                 SignalLine:     kline.SignalLine,
                 Histogram:      kline.Histogram),
             Position:      0,
-            CandlesHeld:   0,
+            InitialAccountBalance: policy.InitialBalance,
+            CurrentAccountBalance: policy.InitialBalance,
+            CurrentDailyPnl: 0m,
+            CurrentDailyDrawdown: 0m,
+            WinsInRow: 0,
+            LossesInRow: 0,
+            TradesTakenToday: 0,
+            DailyProfitTargetReached: false,
+            DailyDrawdownReached: false,
+            LastTradePnl: 0m,
+            LastTradeCloseReason: string.Empty,
+            CandlesSinceLastTradeClosed: 0,
+            ConfiguredStopLoss: policy.StopLoss,
+            ConfiguredTakeProfit: policy.TakeProfit,
+            ConfiguredBreakeven: policy.Breakeven,
+            ConfiguredBreakevenStop: policy.BreakevenStop,
+            ConfiguredMaxCandlesPerTrade: policy.MaxCandlesPerTrade,
+            FeeRate: policy.Fee,
             UnrealizedPnl: 0m);
 
         var result = await mlConnector.DecideAsync(decideRequest, cancellationToken);

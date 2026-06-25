@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace TraderAlgoApi.Dtos.Ml;
@@ -8,6 +9,8 @@ namespace TraderAlgoApi.Dtos.Ml;
 /// model's decision process can be visualized like an automated backtest.
 /// </summary>
 public sealed record MlTrainingDecisionsResponse(
+    [property: JsonPropertyName("ml_policy_id")]   long MlPolicyId,
+    [property: JsonPropertyName("training_run_id")] long TrainingRunId,
     [property: JsonPropertyName("model_id")]        string ModelId,
     [property: JsonPropertyName("symbol")]          string Symbol,
     [property: JsonPropertyName("interval")]        string Interval,
@@ -17,6 +20,8 @@ public sealed record MlTrainingDecisionsResponse(
     [property: JsonPropertyName("final_balance")]   decimal FinalBalance,
     [property: JsonPropertyName("pnl_pct")]         decimal PnlPct,
     [property: JsonPropertyName("n_trades")]        int NTrades,
+    [property: JsonPropertyName("continued_from_training_run_id")] long? ContinuedFromTrainingRunId,
+    [property: JsonPropertyName("policy_params")] IReadOnlyDictionary<string, JsonElement> PolicyParams,
     [property: JsonPropertyName("decisions")]       IReadOnlyList<MlTrainingDecision> Decisions,
     [property: JsonPropertyName("trades")]          IReadOnlyList<MlTrainingTrade> Trades);
 

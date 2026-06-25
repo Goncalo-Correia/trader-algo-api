@@ -9,6 +9,7 @@ public sealed record TradeBotResponseDto(
     [property: JsonPropertyName("tradingAccountName")] string? TradingAccountName,
     [property: JsonPropertyName("backtestId")] long? BacktestId,
     [property: JsonPropertyName("tradingStrategy")] TradingStrategy TradingStrategy,
+    [property: JsonPropertyName("mlPolicyId")] long? MlPolicyId,
     [property: JsonPropertyName("symbolCode")] string SymbolCode,
     [property: JsonPropertyName("intervalCode")] string IntervalCode,
     [property: JsonPropertyName("isEnabled")] bool IsEnabled,
