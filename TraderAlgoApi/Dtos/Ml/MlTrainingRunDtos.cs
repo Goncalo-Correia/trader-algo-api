@@ -3,6 +3,15 @@ using TraderAlgoApi.Models.Enums;
 
 namespace TraderAlgoApi.Dtos.Ml;
 
+/// <summary>
+/// Starts a training run for an existing policy over a date range. Only dates are supplied;
+/// the controller normalises <c>From</c> to 00:00 and <c>To</c> to 23:59 of the given day.
+/// </summary>
+public sealed record MlStartTrainingRequest(
+    [property: JsonPropertyName("mlPolicyId")] long MlPolicyId,
+    [property: JsonPropertyName("from")]       DateOnly From,
+    [property: JsonPropertyName("to")]         DateOnly To);
+
 /// <summary>Returned to the client when a training run is kicked off.</summary>
 public sealed record MlTrainStartedResponse(
     [property: JsonPropertyName("trainingRunId")] long TrainingRunId,
@@ -10,9 +19,10 @@ public sealed record MlTrainStartedResponse(
     [property: JsonPropertyName("status")]        MlTrainingRunStatus Status,
     [property: JsonPropertyName("message")]       string Message);
 
-/// <summary>Read model for a persisted training run.</summary>
+/// <summary>Read model for a persisted training run (model/symbol/interval come from its policy).</summary>
 public sealed record MlTrainingRunResponse(
     [property: JsonPropertyName("id")]             long Id,
+    [property: JsonPropertyName("mlPolicyId")]     long MlPolicyId,
     [property: JsonPropertyName("modelId")]        string ModelId,
     [property: JsonPropertyName("symbolCode")]     string SymbolCode,
     [property: JsonPropertyName("intervalCode")]   string IntervalCode,

@@ -5,6 +5,11 @@ using TraderAlgoApi.Models.Lookups;
 
 namespace TraderAlgoApi.Models;
 
+/// <summary>
+/// One execution of an <see cref="MlPolicy"/> over a date range. Model / symbol / interval /
+/// hyperparameters all come from the linked policy; this row holds only run-specific state:
+/// the date range, status, and final metrics.
+/// </summary>
 [Table("ml_training_runs")]
 public sealed class MlTrainingRun
 {
@@ -12,20 +17,10 @@ public sealed class MlTrainingRun
     [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
     public long Id { get; set; }
 
-    [Required, MaxLength(100)]
-    public string ModelId { get; set; } = string.Empty;
+    public long MlPolicyId { get; set; }
 
-    [Required]
-    public int SymbolId { get; set; }
-
-    [ForeignKey(nameof(SymbolId))]
-    public Symbol Symbol { get; set; } = null!;
-
-    [Required]
-    public int IntervalId { get; set; }
-
-    [ForeignKey(nameof(IntervalId))]
-    public Interval Interval { get; set; } = null!;
+    [ForeignKey(nameof(MlPolicyId))]
+    public MlPolicy Policy { get; set; } = null!;
 
     public DateTimeOffset From { get; set; }
 
@@ -50,8 +45,6 @@ public sealed class MlTrainingRun
         get => (Enums.MlTrainingRunStatus)StatusId;
         set => StatusId = (int)value;
     }
-
-    public int? TotalTimesteps { get; set; }
 
     [Precision(28, 10)]
     public decimal? FinalBalance { get; set; }

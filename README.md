@@ -10,14 +10,17 @@ to **Kronos** for AI candle forecasting and an **ML policy** sidecar for model-d
 ## Contents
 
 - [Architecture](#architecture)
-- [How it works](#how-it-works)
+- [Core runtime](#core-runtime)
+- [Market data & live charts](#market-data--live-charts)
 - [Trading strategies](#trading-strategies)
+- [Trades](#trades)
+- [Trading accounts](#trading-accounts)
 - [Trade bots](#trade-bots)
 - [Backtests](#backtests)
-- [ML policy & training](#ml-policy--training)
+- [ML policies & training](#ml-policies--training)
+- [Kronos forecasting](#kronos-forecasting)
 - [API reference](#api-reference)
 - [Running locally](#running-locally)
-- [Kronos forecasting](#kronos-forecasting)
 
 ---
 
@@ -29,35 +32,97 @@ to **Kronos** for AI candle forecasting and an **ML policy** sidecar for model-d
 | Backend API | C# / .NET 10 | Render |
 | Database | PostgreSQL | Supabase |
 | Forecast service (optional) | FastAPI + Kronos | Modal.com |
+| ML policy service (optional) | FastAPI + PPO (stable-baselines3) | local / container |
 
 Market data flows in from two providers behind a common `IMarketDataProvider` abstraction:
 
 - **Binance** — crypto (e.g. `BTCUSDT`), 24/7 WebSocket stream.
 - **Alpaca** — US equities (e.g. `SPY`), streamed during market hours, polled for higher intervals.
 
+```mermaid
+flowchart LR
+  Binance[(Binance)] --> Ingest
+  Alpaca[(Alpaca)] --> Ingest
+  Ingest[Live ingest] -->|ticks| PriceFeed((PriceFeed))
+  Ingest -->|closed candles| ClosedFeed((ClosedCandleFeed))
+  Ingest --> DB[(PostgreSQL)]
+  PriceFeed --> TradeMon[Trade monitor SL/TP & limit fills]
+  PriceFeed --> Charts[Live chart streams]
+  ClosedFeed --> BotMon[Trade-bot evaluation]
+  ClosedFeed --> Charts
+  TradeMon --> DB
+  BotMon --> DB
+  Charts -->|WebSocket| UI[Angular UI]
+  DB --> REST[REST API] --> UI
+  REST -.HTTP.-> Kronos[Kronos sidecar]
+  REST -.HTTP.-> ML[ML policy sidecar]
+```
+
 ---
 
-## How it works
+## Core runtime
 
 All real-time work is decoupled through two singleton event buses:
 
 - **`PriceFeed`** — every price tick.
 - **`ClosedCandleFeed`** — every closed candle (after indicators are computed).
 
-Producers publish to these buses; consumers subscribe. The main pipelines:
+Producers publish to these buses; consumers subscribe. Background services bridge each feed into a
+bounded `Channel` (`DropOldest`) so bursts never block ingestion. The main pipelines:
 
 | Pipeline | Trigger | What it does |
 |---|---|---|
 | **Live ingest** | Provider WebSocket frame | Publishes ticks; upserts closed candles, computes SMA/RSI/MACD, forwards to `ClosedCandleFeed`. Auto-reconnects on drop. |
-| **Price monitor** | `PriceFeed` tick | Fills pending limit orders and triggers SL/TP on live trades. |
-| **Bot evaluation** | `ClosedCandleFeed` candle | Evaluates each enabled bot's strategy and opens/closes trades. |
-| **Trade events** | Any service | Pub/sub bus pushing per-account trade events to WebSocket clients. |
-| **Live charts** | Client WebSocket | Streams candles (optionally enriched with indicators) to the frontend. |
-| **Backtest stream** | Client WebSocket | Replays historical candles through a strategy (see [Backtests](#backtests)). |
-| **Daily collection** | Midnight UTC timer | Full upsert of every active `symbol × interval`, recomputing indicators. |
+| **Price monitor** (`TradeMonitorService`) | `PriceFeed` tick | Fills pending limit orders and triggers SL/TP on active live trades. |
+| **Bot evaluation** (`TradeBotMonitorService`) | `ClosedCandleFeed` candle | Evaluates each enabled bot's strategy and opens/closes trades. |
+| **Trade events** (`ITradeEventPublisher`) | Any service | Pub/sub bus pushing per-account trade events to WebSocket clients. |
+| **Live charts** (`LiveChartDataService`) | Client WebSocket | Streams candles (optionally enriched with indicators) to the frontend. |
+| **Backtest stream** (`BacktestStreamService`) | Client WebSocket | Replays historical candles through a strategy (see [Backtests](#backtests)). |
+| **Daily collection** (`DataCollectorTimer`) | Midnight UTC timer | Full upsert of every active `symbol × interval`, recomputing indicators. |
 
 Indicators (SMA20/SMA100, RSI(14) + smoothed, MACD) are stored alongside each candle and
 recomputed incrementally whenever a candle is inserted or updated.
+
+---
+
+## Market data & live charts
+
+**Data.** Each `KlineData` row is one OHLCV candle for a `symbol × interval × openTime` (unique
+index). Indicators live in one-to-one side tables (`SimpleMovingAverage`, `RelativeStrengthIndex`,
+`Macd`) keyed on the candle id, so a candle and its indicators are written/recomputed together.
+
+**Historical (REST).** `GET /api/charts/candles` and `GET /api/charts/candles/indicators` return the
+last `lookback` candles for a symbol/interval straight from the database.
+
+**Live (WebSocket).** Two endpoints stream the **forming** candle:
+
+| Endpoint | Payload |
+|---|---|
+| `WS /ws/charts/candles` | OHLCV only |
+| `WS /ws/charts/candleswithindicators` | OHLCV + SMA20/100, RSI + smoothed + divergence, MACD |
+
+Flow: the stream subscribes to `PriceFeed`; each tick is folded into the current bar by
+`CandleAggregator`; every ~250 ms the latest partial bar is serialized and sent. For the indicator
+variant a rolling window of the most recent 200 closes is kept in memory (seeded from the DB,
+extended by `ClosedCandleFeed`) and indicators are computed on the fly.
+
+```mermaid
+sequenceDiagram
+  participant UI
+  participant Stream as LiveChartDataService
+  participant PF as PriceFeed
+  participant Agg as CandleAggregator
+  UI->>Stream: WS connect (symbol, interval)
+  Stream->>DB: seed 200 recent closes (indicator mode)
+  loop every tick
+    PF-->>Stream: tick(symbol, price)
+    Stream->>Agg: fold tick into current bar
+  end
+  loop every ~250 ms
+    Stream->>Agg: get partial bar
+    Stream-->>UI: candle [+ indicators] frame
+  end
+```
 
 ---
 
@@ -65,7 +130,8 @@ recomputed incrementally whenever a candle is inserted or updated.
 
 Each strategy decides `shouldEnterLong` / `shouldEnterShort` from the latest candles and their
 indicators. **All rules in a strategy must be true to enter.** A fifth strategy, **ML Policy**,
-delegates the entry decision to an external model sidecar.
+delegates the entry decision to an external model sidecar (see [ML policies](#ml-policies--training)).
+Rules can be evaluated ad-hoc via `GET /api/rules/{sma|rsi|macd}/evaluate`.
 
 ### SMA — trend retest
 Fast **SMA20** vs slow **SMA100**.
@@ -106,18 +172,85 @@ SMA sets directional bias; MACD confirms timing.
 
 ---
 
+## Trades
+
+A **trade** is one position. It can belong to a live **trading account** (`tradingAccountId`) or to a
+**backtest** (`backtestId`) — never both. Key fields: `side` (Buy/Sell), `orderType` (Market/Limit),
+`status`, `quantity`, `requestedPrice`, `entryPrice`, `stopLoss`/`takeProfit`, `closedPrice`,
+`closeReason`, `fee`, `pnl` (net of fee) and `accountPnl` (account balance after the trade).
+
+**Lifecycle.** Market orders open `Active` immediately at the latest price; limit orders open
+`Pending` and become `Active` when price reaches `requestedPrice`. SL/TP and limit fills are driven
+by `TradeMonitorService`, which evaluates every `PriceFeed` tick (`EvaluatePriceAsync`). On close,
+realized PnL (minus `fee`) is applied to the account's `currentBalance` and a trade event is
+published.
+
+```mermaid
+stateDiagram-v2
+  [*] --> Pending: limit order
+  [*] --> Active: market order
+  Pending --> Active: price hits requestedPrice
+  Pending --> Cancelled: manual stop
+  Active --> Closed: SL / TP hit
+  Active --> Closed: manual stop / opposite bot signal
+  Closed --> [*]
+  Cancelled --> [*]
+```
+
+**Endpoints.** `POST /api/trades` (open), `POST /api/trades/{id}/stop` (close/cancel),
+`PATCH /api/trades/{id}` (adjust SL/TP), `GET /api/trades/account/{id}/active` and `/history`,
+`GET /api/trades/backtest/{id}`.
+
+---
+
+## Trading accounts
+
+A **trading account** is a virtual balance that live trades and trade bots operate against. Fields:
+`name`, `initialBalance`, `currentBalance`, `isActive`. `currentBalance` moves only when a trade
+closes (realized PnL net of fees); unrealized PnL on open trades is computed on read, not persisted.
+
+**Relationships.** One account → many trade bots and many trades. A bot must reference an active
+account to run. Deleting an account cascades to its bots.
+
+```mermaid
+flowchart LR
+  Account[Trading account<br/>currentBalance] --> Bot[Trade bot]
+  Account --> Trades[Trades]
+  Bot -->|opens / closes| Trades
+  Trades -->|realized PnL on close| Account
+```
+
+**Endpoints.** `POST/GET /api/trading-accounts`, `GET/PATCH/DELETE /api/trading-accounts/{id}`.
+
+---
+
 ## Trade bots
 
 A trade bot watches one `symbol × interval` and trades a strategy automatically against a linked
-**trading account**. `TradeBotMonitorService` evaluates every enabled bot on each candle close.
+trading account. `TradeBotMonitorService` evaluates every enabled bot on each candle close.
 
 Key fields: `tradingStrategyId`, `symbol`/`interval`, `quantity`, `stopLoss`/`takeProfit`,
 `breakeven` + `breakevenStop`, `fee`, `isNySessionOnly`, `dailyProfitGoal`, `maxLossesPerDay`,
 `maxCandlesPerTrade`, `isEnabled`.
 
-Rules: only **one active trade per bot** (new signals are ignored while a position is open); an
-opposite-direction signal closes the current trade; enabling a bot that already has an active
-trade on its account is rejected to avoid double entry.
+**Flow.** On each closed candle the monitor selects enabled bots for that symbol/interval, asks
+`TradeBotSignalService` for a signal, and acts:
+
+```mermaid
+flowchart TD
+  C[Closed candle] --> Sel{Enabled bots<br/>for symbol/interval}
+  Sel --> Sig[Evaluate strategy signal]
+  Sig -->|None| Skip[Ignore]
+  Sig -->|Enter long/short| Pos{Open trade<br/>on account?}
+  Pos -->|No| Open[Open market trade<br/>with bot SL/TP/fee]
+  Pos -->|Yes, opposite side| Close[Close current trade<br/>reason = BotSignal]
+  Pos -->|Yes, same side / pending| Ignore[Publish SignalIgnored]
+```
+
+Rules: only **one active trade per bot/account** (new same-direction signals are ignored while a
+position is open); an opposite-direction signal closes the current trade; enabling a bot that
+already has an active trade on its account is rejected to avoid double entry. Live trade events are
+pushed to `WS /ws/tradebots/events?tradingAccountId=`.
 
 ---
 
@@ -127,18 +260,26 @@ A backtest replays historical candles through a strategy and records every simul
 equity curve, drawdowns, and aggregate PnL — without touching a real account. Each backtest owns
 a template trade bot that holds its strategy and risk settings.
 
-**Lifecycle**
+```mermaid
+sequenceDiagram
+  participant UI
+  participant API
+  participant Stream as BacktestStreamService
+  UI->>API: POST /api/backtests (Pending)
+  UI->>Stream: WS /ws/charts/backtest?backtestId=&delay=
+  Note over Stream: status -> Running
+  loop each candle
+    Stream->>Stream: check SL/TP, breakeven, entry signal
+    Stream-->>UI: candle frame
+    Stream-->>UI: tradeBracketUpdate (on breakeven)
+  end
+  Note over Stream: all candles -> Completed (socket closes)
+```
 
-1. `POST /api/backtests` creates the record as `Pending`.
-2. Connect to `WS /ws/charts/backtest?backtestId={id}` to start execution → `Running`.
-   Add `&delay=true` to pace candles at 100 ms each for live visualisation.
-3. Per candle the server checks SL/TP, the breakeven trigger, and the entry signal, then emits a
-   `candle` frame. A `tradeBracketUpdate` frame is sent when breakeven moves the stop-loss.
-4. When all candles are processed → `Completed` (socket closes normally). Disconnecting early →
-   `Cancelled`; an error → `Failed`. The linked bot is disabled on any terminal status.
+**Lifecycle.** `Pending → Running → Completed` (clean socket close). Disconnecting early →
+`Cancelled`; an error → `Failed`. The linked bot is disabled on any terminal status.
 
-**Simulation rules**
-
+**Simulation rules.**
 - One trade open at a time.
 - Stop-loss is checked before take-profit; if both hit in one candle, SL wins (conservative).
 - `breakeven` moves the stop to entry (or to `breakevenStop`) once unrealised PnL hits the threshold.
@@ -147,38 +288,96 @@ a template trade bot that holds its strategy and risk settings.
 
 ---
 
-## ML policy & training
+## ML policies & training
 
 The **ML Policy** strategy delegates entry decisions to an external PPO model served by the
 [trader-algo-ml](https://github.com/Goncalo-Correia/trader-algo-ml) sidecar (base URL under
-`MlPolicy:`). This API orchestrates training runs and lets the frontend replay a trained model's
-decision process the same way a backtest is streamed.
+`MlPolicy:`). This API stores the training configuration, orchestrates training runs, and lets the
+frontend replay a trained model's decision process the same way a backtest is streamed.
 
-**Training runs**
+**Data model.**
 
-1. `POST /api/ml/train` (symbol, interval, `from_date`/`to_date`, `model_id`, and optional PPO
-   hyperparameters) records an `MlTrainingRun` as `Pending` and forwards the job to the sidecar,
-   returning the new `trainingRunId`. Null hyperparameters are omitted so the trainer applies its
-   own defaults.
+```mermaid
+erDiagram
+  ml_models ||--o{ ml_policies : "used by"
+  ml_policies ||--o{ ml_training_runs : "has runs"
+  ml_models { int Id; string Name }
+  ml_policies { long Id; int ModelId; int SymbolId; int IntervalId; int TotalTimesteps; decimal hyperparameters }
+  ml_training_runs { long Id; long MlPolicyId; datetimeoffset From; datetimeoffset To; int StatusId; decimal FinalBalance }
+```
+
+- **`ml_models`** — model registry (seeded with `ppo-v1`); `Name` matches the Python model id.
+- **`ml_policies`** — a reusable config: model + symbol/interval + all PPO/risk hyperparameters
+  (`totalTimesteps`, `initialBalance`, `quantity`, `takeProfit`, `stopLoss`, `breakeven`,
+  `breakevenStop`, `fee`, `slippage`, `dailyProfit`, `dailyDrawdownLimit`, `maxCandlesPerTrade`,
+  `maxTrailingDrawdown`).
+- **`ml_training_runs`** — one execution of a policy over a date range (model/symbol/interval/params
+  come from the policy); holds only run-specific state: dates, status, and final metrics.
+
+**Training flow.**
+
+```mermaid
+sequenceDiagram
+  participant UI
+  participant API
+  participant ML as ML sidecar (Python)
+  UI->>API: POST /api/ml/train { mlPolicyId, from, to }
+  API->>DB: create ml_training_runs (Pending)
+  API->>ML: POST /train (policy params + run id)
+  API-->>UI: { trainingRunId }
+  ML->>ML: train PPO (background)
+  ML->>API: PATCH /training-runs/{id}/complete (metrics)
+  API->>DB: Completed / Failed
+```
+
+1. `POST /api/ml/train` takes `{ mlPolicyId, from, to }` (dates only — the controller stores `from`
+   at **00:00** and `to` at **23:59** of the chosen days). It records a run as `Pending`, builds the
+   Python request from the policy, and returns the `trainingRunId`.
 2. The sidecar trains in the background and calls back to `PATCH /api/ml/training-runs/{id}/complete`,
    moving the run `Pending → Running → Completed` (or `Failed`) and recording final balance, PnL %,
    and trade count.
 3. Each run's deterministic **decision log** is stored uniquely by `trainingRunId` (never
-   overwritten), so re-training the same `model_id` preserves every run's history.
+   overwritten), so re-running a policy preserves every run's history.
 
 Risk hyperparameters are **absolute amounts**, consistent with backtests — not fractions.
-`stopLoss`/`takeProfit`/`breakeven`/`breakevenStop` are price offsets from entry, `feeRate` is a
-flat cash fee per round-trip, `slippageRate` is a flat price offset per fill, and
-`maxTrailingDrawdownThreshold` is a cash drawdown from peak balance.
+`stopLoss`/`takeProfit`/`breakeven`/`breakevenStop` are price offsets from entry, `fee` is a flat
+cash fee per round-trip, `slippage` is a flat price offset per fill, and `maxTrailingDrawdown` is a
+cash drawdown from peak balance.
 
-**Decision replay**
+**Decision replay.** `WS /ws/ml/training?trainingRunId={id}` streams the run's candles (from the
+database) zipped with the model's per-candle decisions — emitting `candle` and `mlDecision` frames —
+so entry/hold choices and confidence can be visualised candle-by-candle.
+`GET /api/ml/training-runs/{id}/decisions` returns the same log as a single payload. Deleting a run
+also removes its decision log from the sidecar.
 
-`WS /ws/ml/training?trainingRunId={id}` streams the run's candles (from the database) zipped with
-the model's per-candle decisions — emitting `candle` and `mlDecision` frames — so the entry/hold
-choices and confidence can be visualised candle-by-candle. `GET /api/ml/training-runs/{id}/decisions`
-returns the same log as a single payload for static rendering.
+**Inference.** `POST /api/ml/decide` fetches the latest candle+indicators and asks the sidecar for an
+entry action — this is what the live `MlPolicy` strategy and ML backtests call while flat.
 
-Deleting a run (`DELETE /api/ml/training-runs/{id}`) also removes its decision log from the sidecar.
+---
+
+## Kronos forecasting
+
+[Kronos](https://github.com/shiyu-coder/Kronos) is an open-source foundation model for financial
+time-series forecasting — a GPT-style autoregressive Transformer that predicts the next OHLCV
+candle instead of the next word.
+
+The API does **not** host Kronos directly. It calls a separate **Kronos Connector** (a FastAPI
+wrapper around the model, recommended on Modal.com for serverless GPU) over HTTP, configured via
+`Kronos:BaseUrl`.
+
+```mermaid
+flowchart LR
+  UI -->|GET /api/kronos/...| API
+  API -->|recent candles| Conn[Kronos connector]
+  Conn --> Model[Kronos model]
+  Model -->|forecast candles| Conn --> API --> UI
+```
+
+**Flow.** A `GET /api/kronos/{model}/{mode}` request loads recent candles for the symbol/interval,
+posts them to the connector, and returns the predicted forward candles for charting. Models trade
+context length for capacity — `kronos-mini` (up to 2048 candles), `kronos-small` / `kronos-base` (up
+to 512). Each comes in two modes: **precise** (low temperature, multi-sample) and **diverse** (high
+temperature, single sample). If the connector is down the endpoints return `503`.
 
 ---
 
@@ -191,13 +390,14 @@ REST base path `/api`. Enums (side, status, strategy, etc.) serialize as strings
 | **Trading accounts** | `POST/GET /trading-accounts` · `GET/PATCH/DELETE /trading-accounts/{id}` |
 | **Trade bots** | `POST/GET /tradebots` · `GET/PATCH/DELETE /tradebots/{id}` · `POST /tradebots/{id}/enable` · `/disable` |
 | **Backtests** | `POST/GET /backtests` · `GET/DELETE /backtests/{id}` |
-| **ML** | `POST /ml/train` · `POST /ml/decide` · `GET /ml/training-runs` · `GET/DELETE /ml/training-runs/{id}` · `GET /ml/training-runs/{id}/decisions` · `PATCH /ml/training-runs/{id}/complete` |
 | **Trades** | `POST /trades` · `POST /trades/{id}/stop` · `PATCH /trades/{id}` · `GET /trades/account/{id}/active` · `/history` · `GET /trades/backtest/{id}` |
+| **ML policies** | `GET /ml/models` · `GET/POST /ml/policies` · `GET/PUT/DELETE /ml/policies/{id}` |
+| **ML training** | `POST /ml/train` · `POST /ml/decide` · `GET /ml/training-runs` · `GET/DELETE /ml/training-runs/{id}` · `GET /ml/training-runs/{id}/decisions` · `PATCH /ml/training-runs/{id}/complete` |
 | **Rules** | `GET /rules/{sma\|rsi\|macd}/evaluate?symbol=&interval=` |
-| **Charts** | `GET /charts/candles?symbol=&interval=&lookback=` |
+| **Charts** | `GET /charts/candles?symbol=&interval=&lookback=` · `GET /charts/candles/indicators` |
 | **Symbols / Intervals** | `GET /symbols` · `GET /intervals` |
 | **Data collector** | `POST /data-collector/{symbol}/{interval}` · `POST /data-collector/full-sync` |
-| **Kronos** | `GET /kronos/...` (candle forecasts) |
+| **Kronos** | `GET /kronos/{model}/{mode}?symbol=&interval=` (candle forecasts) |
 | **Health** | `GET /health` (checks DB connectivity) |
 
 **WebSocket endpoints**
@@ -240,17 +440,5 @@ Requires the **.NET 10 SDK** and a PostgreSQL database (Supabase or local).
 
 Optional sidecars (base URLs configurable under `Kronos:` and `MlPolicy:`): the Kronos forecast
 service and the ML policy service. The API runs without them — only the related endpoints/strategy
-are affected.
-
----
-
-## Kronos forecasting
-
-[Kronos](https://github.com/shiyu-coder/Kronos) is an open-source foundation model for financial
-time-series forecasting — a GPT-style autoregressive Transformer that predicts the next OHLCV
-candle instead of the next word.
-
-The API does **not** host Kronos directly. It calls a separate **Kronos Connector** (a FastAPI
-wrapper around the model, recommended on Modal.com for serverless GPU) over HTTP, configured via
-`Kronos:BaseUrl`. Keep the connector in its own repo with the upstream Kronos repo as a read-only
-git submodule. The `GET /api/kronos/...` endpoints return forecast candles for charting.
+are affected. When the .NET API runs in a container and a sidecar runs on the host, point its base
+URL at `http://host.docker.internal:<port>`.

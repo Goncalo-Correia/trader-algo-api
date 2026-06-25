@@ -39,9 +39,11 @@ public sealed class MlTrainingStreamService(
 
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-        // The run record is the source of truth for the candle range (symbol/interval/from/to).
+        // The run + its policy are the source of truth for the candle range (symbol/interval from
+        // the policy; from/to from the run).
         var run = await dbContext.MlTrainingRuns
             .AsNoTracking()
+            .Include(r => r.Policy)
             .FirstOrDefaultAsync(r => r.Id == trainingRunId, cancellationToken);
         if (run is null)
         {
@@ -62,8 +64,8 @@ public sealed class MlTrainingStreamService(
 
         var candles = await dbContext.KlineData
             .AsNoTracking()
-            .Where(k => k.SymbolId == run.SymbolId &&
-                        k.IntervalId == run.IntervalId &&
+            .Where(k => k.SymbolId == run.Policy.SymbolId &&
+                        k.IntervalId == run.Policy.IntervalId &&
                         k.OpenTime >= run.From &&
                         k.OpenTime <= run.To)
             .Include(k => k.SimpleMovingAverage)

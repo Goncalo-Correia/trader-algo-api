@@ -5,6 +5,7 @@ using TraderAlgoApi.Data;
 using TraderAlgoApi.Dtos.Backtests;
 using TraderAlgoApi.Dtos.Charts;
 using TraderAlgoApi.Dtos.Ml;
+using TraderAlgoApi.Dtos.Trades;
 using TraderAlgoApi.Models;
 using TraderAlgoApi.Models.Enums;
 using TraderAlgoApi.Services.Ml;
@@ -34,6 +35,10 @@ public sealed class BacktestStreamService(
     // Trade open/close already flush on their own; this only bounds the gap between them so a
     // crashed run resumes from at most this many candles back instead of hammering the DB every candle.
     private const int ProgressFlushEvery = 200;
+
+    // Candles are coalesced into a single "candleBatch" frame outside delay mode, cutting
+    // thousands of tiny per-candle frames (and their parse/render cost) down to a handful.
+    private const int CandleBatchSize = 250;
 
     public async Task StreamAsync(
         HttpContext context,
@@ -213,6 +218,22 @@ public sealed class BacktestStreamService(
 
         var candlesSinceFlush = 0;
 
+        var symbolCode   = backtest.Symbol.Code;
+        var intervalCode = backtest.Interval.Code;
+
+        // Candle frames are coalesced into a single message. The buffer is always flushed
+        // *before* a trade/bracket event so the client has already rendered the candle the
+        // event refers to — markers can then only ever resolve to a bar that exists.
+        var candleBuffer = new List<CandleWithIndicatorsResponseDto>(CandleBatchSize);
+
+        async Task FlushCandlesAsync()
+        {
+            if (candleBuffer.Count == 0)
+                return;
+            await SendMessageAsync(clientSocket, "candleBatch", candleBuffer, cancellationToken);
+            candleBuffer.Clear();
+        }
+
         for (var i = startIndex; i < combined.Count; i++)
         {
             var current      = combined[i];
@@ -222,6 +243,16 @@ public sealed class BacktestStreamService(
             var context = BacktestSimulationEngine.BuildContext(
                 backtest.Symbol.Code, backtest.Interval.Code,
                 secondPrev, previous, current);
+
+            if (delay)
+                await Task.Delay(CandleInterval, cancellationToken);
+
+            // Emit the candle before evaluating trades: every trade/bracket event below
+            // refers to this candle, and the client must hold it first for the marker to
+            // land on the right bar. Delay mode flushes one candle at a time for pacing.
+            candleBuffer.Add(ToDto(current));
+            if (delay)
+                await FlushCandlesAsync();
 
             // Advance per-trade candle counter.
             if (openTrade is not null)
@@ -235,6 +266,10 @@ public sealed class BacktestStreamService(
                 {
                     BacktestSimulationEngine.CloseTrade(openTrade, closePrice!.Value, closeReason.Value, current.OpenTime, ref balance);
                     await dbContext.SaveChangesAsync(cancellationToken);
+
+                    await FlushCandlesAsync();
+                    await SendMessageAsync(clientSocket, "tradeClosed",
+                        ToTradeDto(openTrade, symbolCode, intervalCode), cancellationToken);
 
                     ApplyDailyStat(dailyStats, openTrade);
                     openTrade = null;
@@ -250,6 +285,10 @@ public sealed class BacktestStreamService(
                 BacktestSimulationEngine.CloseTrade(openTrade, current.Close, TradeCloseReason.Manual, current.OpenTime, ref balance);
                 await dbContext.SaveChangesAsync(cancellationToken);
 
+                await FlushCandlesAsync();
+                await SendMessageAsync(clientSocket, "tradeClosed",
+                    ToTradeDto(openTrade, symbolCode, intervalCode), cancellationToken);
+
                 ApplyDailyStat(dailyStats, openTrade);
                 openTrade = null;
                 openTradeCandles = 0;
@@ -264,19 +303,9 @@ public sealed class BacktestStreamService(
                     openTrade.StopLoss = bot.BreakevenStop.HasValue ? -bot.BreakevenStop.Value : 0m;
                     await dbContext.SaveChangesAsync(cancellationToken);
 
-                    var bracketUpdate = new TradeBracketUpdateDto(
-                        TradeId:    openTrade.Id,
-                        StopLoss:   openTrade.StopLoss,
-                        TakeProfit: openTrade.TakeProfit);
-
-                    var bracketPayload = JsonSerializer.SerializeToUtf8Bytes(
-                        new BacktestStreamMessageDto<TradeBracketUpdateDto>("tradeBracketUpdate", bracketUpdate),
-                        JsonOptions);
-
-                    await clientSocket.SendAsync(
-                        bracketPayload,
-                        WebSocketMessageType.Text,
-                        endOfMessage: true,
+                    await FlushCandlesAsync();
+                    await SendMessageAsync(clientSocket, "tradeBracketUpdate",
+                        new TradeBracketUpdateDto(openTrade.Id, openTrade.StopLoss, openTrade.TakeProfit),
                         cancellationToken);
                 }
             }
@@ -320,19 +349,18 @@ public sealed class BacktestStreamService(
                     };
                     dbContext.Trades.Add(openTrade);
                     await dbContext.SaveChangesAsync(cancellationToken);
+
+                    await FlushCandlesAsync();
+                    await SendMessageAsync(clientSocket, "tradeOpened",
+                        ToTradeDto(openTrade, symbolCode, intervalCode), cancellationToken);
+
                     openTradeCandles = 1;
                 }
             }
 
-            if (delay)
-                await Task.Delay(CandleInterval, cancellationToken);
-
-            // Send candle to client.
-            var candleDto = ToDto(current);
-            var payload = JsonSerializer.SerializeToUtf8Bytes(
-                new BacktestStreamMessageDto<CandleWithIndicatorsResponseDto>("candle", candleDto),
-                JsonOptions);
-            await clientSocket.SendAsync(payload, WebSocketMessageType.Text, endOfMessage: true, cancellationToken);
+            // Outside delay mode the buffer is paced by size rather than time.
+            if (candleBuffer.Count >= CandleBatchSize)
+                await FlushCandlesAsync();
 
             // Track incremental progress in memory; flush periodically so REST endpoints reflect
             // current state without a DB round-trip on every single candle.
@@ -354,7 +382,15 @@ public sealed class BacktestStreamService(
             BacktestSimulationEngine.CloseTrade(openTrade, last.Close, TradeCloseReason.Manual, last.CloseTime, ref balance);
             backtest.FinalBalance = balance;
             backtest.Pnl = balance - backtest.InitialBalance;
+            await dbContext.SaveChangesAsync(cancellationToken);
+
+            await FlushCandlesAsync();
+            await SendMessageAsync(clientSocket, "tradeClosed",
+                ToTradeDto(openTrade, symbolCode, intervalCode), cancellationToken);
         }
+
+        // Flush any candles still buffered after the loop.
+        await FlushCandlesAsync();
 
         // Final flush of any progress accumulated since the last batch.
         await dbContext.SaveChangesAsync(cancellationToken);
@@ -447,6 +483,46 @@ public sealed class BacktestStreamService(
             k.Macd?.MacdLine,
             k.Macd?.SignalLine,
             k.Macd?.Histogram);
+
+    // Serializes one typed envelope and writes it as a single WebSocket text frame.
+    private static async Task SendMessageAsync<T>(
+        WebSocket socket,
+        string type,
+        T data,
+        CancellationToken cancellationToken)
+    {
+        var payload = JsonSerializer.SerializeToUtf8Bytes(
+            new BacktestStreamMessageDto<T>(type, data),
+            JsonOptions);
+        await socket.SendAsync(payload, WebSocketMessageType.Text, endOfMessage: true, cancellationToken);
+    }
+
+    // Projects a simulated trade to the shared wire DTO. The backtest already holds the
+    // symbol/interval codes, so we avoid loading the trade's navigation properties.
+    private static TradeResponseDto ToTradeDto(Trade t, string symbolCode, string? intervalCode) =>
+        new(
+            Id:               t.Id,
+            SymbolCode:       symbolCode,
+            IntervalCode:     intervalCode,
+            Side:             (TradeSide)t.SideId,
+            OrderType:        (TradeOrderType)t.OrderTypeId,
+            Quantity:         t.Quantity,
+            RequestedPrice:   t.RequestedPrice,
+            EntryPrice:       t.EntryPrice,
+            StopLoss:         t.StopLoss,
+            TakeProfit:       t.TakeProfit,
+            Status:           (TradeStatus)t.StatusId,
+            CreatedAt:        t.CreatedAt.ToUnixTimeMilliseconds(),
+            OpenedAt:         t.OpenedAt?.ToUnixTimeMilliseconds(),
+            ClosedAt:         t.ClosedAt?.ToUnixTimeMilliseconds(),
+            ClosedPrice:      t.ClosedPrice,
+            CloseReason:      t.CloseReasonId is int id ? (TradeCloseReason)id : null,
+            Fee:              t.Fee,
+            Pnl:              t.Pnl,
+            AccountPnl:       t.AccountPnl,
+            UnrealizedPnl:    null,
+            TradingAccountId: t.TradingAccountId,
+            BacktestId:       t.BacktestId);
 
     // Reads incoming frames so the server detects client close frames.
     private static async Task MonitorClientAsync(
