@@ -104,4 +104,63 @@ public sealed class ChartsController(ApplicationDbContext dbContext) : Controlle
 
         return Ok(candles);
     }
+
+    [HttpGet("candles/indicators/date-interval")]
+    public async Task<ActionResult<IReadOnlyList<CandleWithIndicatorsResponseDto>>> GetCandlesWithIndicatorsByDateInterval(
+        [FromQuery] DateTimeOffset from,
+        [FromQuery] DateTimeOffset to,
+        [FromQuery] string? symbol,
+        [FromQuery] string? interval,
+        CancellationToken cancellationToken = default)
+    {
+        if (from > to)
+            return BadRequest("'from' must not be after 'to'.");
+
+        // Date-only inputs: start the window at midnight and end it at 23:59 of the chosen day.
+        var fromInstant = new DateTimeOffset(from.Year, from.Month, from.Day, 0, 0, 0, TimeSpan.Zero);
+        var toInstant = new DateTimeOffset(to.Year, to.Month, to.Day, 23, 59, 0, TimeSpan.Zero);
+
+        var symbolCode = string.IsNullOrWhiteSpace(symbol)
+            ? await dbContext.Symbols
+                .Where(s => s.IsDefault)
+                .Select(s => s.Code)
+                .FirstOrDefaultAsync(cancellationToken) ?? string.Empty
+            : symbol;
+
+        var intervalCode = string.IsNullOrWhiteSpace(interval)
+            ? await dbContext.Intervals
+                .Where(i => i.IsDefault)
+                .Select(i => i.Code)
+                .FirstOrDefaultAsync(cancellationToken) ?? string.Empty
+            : interval;
+
+        var candles = await dbContext.KlineData
+            .AsNoTracking()
+            .Where(kline =>
+                kline.Symbol.Code == symbolCode &&
+                kline.Interval.Code == intervalCode &&
+                kline.OpenTime >= fromInstant &&
+                kline.OpenTime <= toInstant)
+            .OrderBy(kline => kline.OpenTime)
+            .Select(kline => new CandleWithIndicatorsResponseDto(
+                kline.OpenTime.ToUnixTimeSeconds(),
+                kline.Open,
+                kline.High,
+                kline.Low,
+                kline.Close,
+                kline.Volume,
+                kline.TakerBuyBaseAssetVolume,
+                kline.Volume - kline.TakerBuyBaseAssetVolume,
+                kline.SimpleMovingAverage!.Sma20,
+                kline.SimpleMovingAverage!.Sma100,
+                kline.RelativeStrengthIndex!.Rsi,
+                kline.RelativeStrengthIndex!.RsiSmooth,
+                kline.RelativeStrengthIndex!.Divergence,
+                kline.Macd!.MacdLine,
+                kline.Macd!.SignalLine,
+                kline.Macd!.Histogram))
+            .ToListAsync(cancellationToken);
+
+        return Ok(candles);
+    }
 }
