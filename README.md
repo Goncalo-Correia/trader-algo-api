@@ -375,7 +375,7 @@ The sidecar promotes a candidate only if it beats the incumbent on a risk-adjust
 the incumbent's OOS PnL by a margin when its OOS drawdown is no worse, otherwise it must beat the
 incumbent's **Calmar ratio** (OOS PnL ÷ trailing drawdown). So a higher-PnL run may intentionally not
 be promoted if it is much riskier. The currently-served model per policy is the source of truth and is
-exposed by `GET /api/ml/models` — do not equate "training completed" with "now serving".
+exposed by `GET /api/ml/served-models` — do not equate "training completed" with "now serving".
 
 **Durable run status / orphan recovery.** Training runs are background tasks in the sidecar. If the
 sidecar restarts mid-run, on startup it reconciles orphaned runs: any run still in flight is set to
@@ -426,10 +426,14 @@ training environment.
 > - `current_daily_drawdown` is a **fraction in `[0, 1]`** of the day-start balance — **not cash**.
 > - `current_daily_pnl`, `last_trade_pnl`, `fee_rate`, `unrealized_pnl` are **absolute cash**.
 
-**Served models.** `GET /api/ml/models` is a passthrough to the sidecar's model registry, returning
-per-policy `oosPnlPct`, `oosFinalBalance`, `obsDim`, `schemaVersion`, and `calibrated`. `calibrated`
-indicates whether the model's `confidence` has been fitted to the realized win rate at that
-probability (when a run has enough trades); otherwise `confidence` is the raw policy probability.
+**Served models.** `GET /api/ml/served-models` composes the sidecar's model registry with our
+policies and returns **exactly one row per policy** (camelCase): `served` (false when nothing is
+promoted yet), `servedTrainingRunId` (the run whose model is live — maps to `MlTrainingRun.id`),
+`modelId`, `pnlPct`/`finalBalance`, `oosPnlPct`/`oosFinalBalance`, `nTrades`, `obsDim`,
+`schemaVersion`, `runId` (MLflow), and `calibrated`. `calibrated` indicates whether the model's
+`confidence` has been fitted to the realized win rate at that probability (when a run has enough
+trades); otherwise `confidence` is the raw policy probability. This endpoint replaces the removed
+model-registry endpoint that used to live at `GET /api/ml/models`.
 
 ---
 
@@ -470,7 +474,7 @@ REST base path `/api`. Enums (side, status, strategy, etc.) serialize as strings
 | **Backtests** | `POST/GET /backtests` · `GET/DELETE /backtests/{id}` |
 | **Trades** | `POST /trades` · `POST /trades/{id}/stop` · `PATCH /trades/{id}` · `GET /trades/account/{id}/active` · `/history` · `GET /trades/backtest/{id}` |
 | **ML policies** | `GET/POST /ml/policies` · `GET/PUT/DELETE /ml/policies/{id}` |
-| **ML training** | `POST /ml/train` · `POST /ml/retrain-all` · `POST /ml/decide` · `GET /ml/models` · `GET /ml/training-runs` · `GET/DELETE /ml/training-runs/{id}` · `GET /ml/training-runs/{id}/tracking` · `GET /ml/training-runs/{id}/decisions` · `PATCH /ml/training-runs/{id}/complete` |
+| **ML training** | `POST /ml/train` · `POST /ml/retrain-all` · `POST /ml/decide` · `GET /ml/served-models` · `GET /ml/training-runs[?mlPolicyId=]` · `GET/DELETE /ml/training-runs/{id}` · `GET /ml/training-runs/{id}/tracking` · `GET /ml/training-runs/{id}/decisions` · `PATCH /ml/training-runs/{id}/complete` |
 | **Rules** | `GET /rules/{sma\|rsi\|macd}/evaluate?symbol=&interval=` |
 | **Charts** | `GET /charts/candles?symbol=&interval=&lookback=` · `GET /charts/candles/indicators` · `GET /charts/candles/indicators/date-interval?from=&to=&symbol=&interval=` |
 | **Symbols / Intervals** | `GET /symbols` · `GET /intervals` |

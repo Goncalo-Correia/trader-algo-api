@@ -78,12 +78,19 @@ public sealed class MlController(
 
     [HttpGet("training-runs")]
     public async Task<ActionResult<IReadOnlyList<MlTrainingRunResponse>>> GetTrainingRuns(
+        [FromQuery] long? mlPolicyId,
         CancellationToken cancellationToken)
     {
-        var runs = await dbContext.MlTrainingRuns
+        var query = dbContext.MlTrainingRuns
             .AsNoTracking()
             .Include(r => r.Policy).ThenInclude(p => p.Symbol)
             .Include(r => r.Policy).ThenInclude(p => p.Interval)
+            .AsQueryable();
+
+        if (mlPolicyId is long policyId)
+            query = query.Where(r => r.MlPolicyId == policyId);
+
+        var runs = await query
             .OrderByDescending(r => r.StartedAt)
             .ToListAsync(cancellationToken);
 
@@ -293,16 +300,52 @@ public sealed class MlController(
     }
 
     /// <summary>
-    /// Lists the models the ML service is currently serving (the live model per policy). Promotion
-    /// is gated and risk-aware, so a Completed training run is not necessarily the served model — use
-    /// this endpoint to know what is actually live.
+    /// Lists the currently-served model per policy. Promotion is gated and risk-aware, so a Completed
+    /// training run is not necessarily the served model — use this to know what is actually live.
+    /// Returns exactly one row per policy; <c>served</c> is false when nothing has been promoted yet.
     /// </summary>
-    [HttpGet("models")]
-    public async Task<ActionResult<IReadOnlyList<MlModelInfoResponse>>> GetModels(
+    /// <remarks>
+    /// Replaces the removed model-registry endpoint that used to live at <c>GET /api/ml/models</c>.
+    /// </remarks>
+    [HttpGet("served-models")]
+    public async Task<ActionResult<IReadOnlyList<MlServedModelResponse>>> GetServedModels(
         CancellationToken cancellationToken)
     {
+        var policies = await dbContext.MlPolicies
+            .AsNoTracking()
+            .Include(p => p.Symbol)
+            .Include(p => p.Interval)
+            .OrderBy(p => p.Id)
+            .ToListAsync(cancellationToken);
+
         var models = await mlConnector.GetModelsAsync(cancellationToken);
-        return Ok(models);
+        var byPolicy = models
+            .Where(m => m.MlPolicyId.HasValue)
+            .GroupBy(m => m.MlPolicyId!.Value)
+            .ToDictionary(g => g.Key, g => g.First());
+
+        var result = policies.Select(p =>
+        {
+            byPolicy.TryGetValue(p.Id, out var m);
+            return new MlServedModelResponse(
+                MlPolicyId:          p.Id,
+                SymbolCode:          p.Symbol.Code,
+                IntervalCode:        p.Interval.Code,
+                Served:              m is not null,
+                ServedTrainingRunId: m?.TrainingRunId,
+                ModelId:             m?.ModelId,
+                FinalBalance:        m?.FinalBalance,
+                PnlPct:              m?.PnlPct,
+                OosFinalBalance:     m?.OosFinalBalance,
+                OosPnlPct:           m?.OosPnlPct,
+                NTrades:             m?.NTrades,
+                Calibrated:          m?.Calibrated,
+                ObsDim:              m?.ObsDim,
+                SchemaVersion:       m?.SchemaVersion,
+                RunId:               m?.RunId);
+        }).ToList();
+
+        return Ok(result);
     }
 
     /// <summary>
@@ -311,7 +354,7 @@ public sealed class MlController(
     /// the change are rejected at inference time until retrained).
     /// </summary>
     [HttpPost("retrain-all")]
-    public async Task<ActionResult<IReadOnlyList<MlTrainStartedResponse>>> RetrainAll(
+    public async Task<ActionResult<IReadOnlyList<MlRetrainPolicyResult>>> RetrainAll(
         [FromBody] MlRetrainAllRequest request,
         CancellationToken cancellationToken)
     {
@@ -323,14 +366,37 @@ public sealed class MlController(
             .Include(p => p.Interval)
             .ToListAsync(cancellationToken);
 
-        var started = new List<MlTrainStartedResponse>(policies.Count);
+        // Skip policies that already have a run in flight so the call is idempotent and safe to
+        // retry — it won't stack duplicate concurrent runs on the same policy.
+        var pendingId = (int)MlTrainingRunStatus.Pending;
+        var runningId = (int)MlTrainingRunStatus.Running;
+        var inFlight = (await dbContext.MlTrainingRuns
+                .Where(r => r.StatusId == pendingId || r.StatusId == runningId)
+                .Select(r => r.MlPolicyId)
+                .Distinct()
+                .ToListAsync(cancellationToken))
+            .ToHashSet();
+
+        var results = new List<MlRetrainPolicyResult>(policies.Count);
         foreach (var policy in policies)
         {
-            var result = await StartTrainingAsync(policy, request.From, request.To, cancellationToken);
-            started.Add(result);
+            if (inFlight.Contains(policy.Id))
+            {
+                results.Add(new MlRetrainPolicyResult(
+                    policy.Id, null, "Skipped",
+                    $"Policy {policy.Id} already has a training run in progress."));
+                continue;
+            }
+
+            var started = await StartTrainingAsync(policy, request.From, request.To, cancellationToken);
+            results.Add(new MlRetrainPolicyResult(
+                policy.Id,
+                started.TrainingRunId,
+                started.Status == MlTrainingRunStatus.Failed ? "Failed" : "Started",
+                started.Message));
         }
 
-        return Ok(started);
+        return Ok(results);
     }
 
     // -------------------------------------------------------------------------

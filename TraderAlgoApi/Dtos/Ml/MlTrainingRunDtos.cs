@@ -26,6 +26,18 @@ public sealed record MlTrainStartedResponse(
     [property: JsonPropertyName("status")]        MlTrainingRunStatus Status,
     [property: JsonPropertyName("message")]       string Message);
 
+/// <summary>
+/// Per-policy outcome of a bulk retrain. <c>Status</c> is <c>Started</c> (a run was created and
+/// forwarded), <c>Skipped</c> (the policy already had a run in flight — no new run created), or
+/// <c>Failed</c> (the run was created but the ML service rejected the start). <c>TrainingRunId</c> is
+/// null only for <c>Skipped</c>.
+/// </summary>
+public sealed record MlRetrainPolicyResult(
+    [property: JsonPropertyName("mlPolicyId")]    long MlPolicyId,
+    [property: JsonPropertyName("trainingRunId")] long? TrainingRunId,
+    [property: JsonPropertyName("status")]        string Status,
+    [property: JsonPropertyName("message")]       string Message);
+
 /// <summary>Read model for a persisted training run (model/symbol/interval come from its policy).</summary>
 public sealed record MlTrainingRunResponse(
     [property: JsonPropertyName("id")]             long Id,

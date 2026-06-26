@@ -76,8 +76,9 @@ public sealed class MlConnectorService(
             response.EnsureSuccessStatusCode();
         }
 
-        var result = await response.Content.ReadFromJsonAsync<List<MlModelInfoResponse>>(cancellationToken);
-        return result ?? [];
+        // The ML service wraps the list in { "models": [ ... ] }.
+        var result = await response.Content.ReadFromJsonAsync<MlModelsEnvelope>(cancellationToken);
+        return result?.Models ?? [];
     }
 
     public async Task<MlTrainingDecisionsResponse?> GetTrainingDecisionsAsync(

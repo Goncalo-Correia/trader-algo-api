@@ -22,6 +22,7 @@ public sealed record MlTrainingDecisionsResponse(
     [property: JsonPropertyName("oos_final_balance")] decimal? OosFinalBalance,
     [property: JsonPropertyName("oos_pnl_pct")]     decimal? OosPnlPct,
     [property: JsonPropertyName("n_trades")]        int NTrades,
+    [property: JsonPropertyName("calibrated")]      bool? Calibrated,
     [property: JsonPropertyName("continued_from_training_run_id")] long? ContinuedFromTrainingRunId,
     [property: JsonPropertyName("policy_params")] IReadOnlyDictionary<string, JsonElement> PolicyParams,
     [property: JsonPropertyName("decisions")]       IReadOnlyList<MlTrainingDecision> Decisions,
