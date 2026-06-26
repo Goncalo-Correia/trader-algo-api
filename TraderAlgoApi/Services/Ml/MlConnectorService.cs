@@ -60,6 +60,26 @@ public sealed class MlConnectorService(
         return result!;
     }
 
+    public async Task<IReadOnlyList<MlModelInfoResponse>> GetModelsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        using var httpClient = httpClientFactory.CreateClient(HttpClientName);
+
+        using var response = await httpClient.GetAsync("/models", cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            logger.LogError(
+                "ML service returned {StatusCode} fetching models: {Body}",
+                (int)response.StatusCode, body);
+            response.EnsureSuccessStatusCode();
+        }
+
+        var result = await response.Content.ReadFromJsonAsync<List<MlModelInfoResponse>>(cancellationToken);
+        return result ?? [];
+    }
+
     public async Task<MlTrainingDecisionsResponse?> GetTrainingDecisionsAsync(
         long trainingRunId,
         CancellationToken cancellationToken = default)

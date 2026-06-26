@@ -21,7 +21,8 @@ public sealed class TradeBotSignalService(
     SmaTradingRule smaRule,
     RsiTradingRule rsiRule,
     MacdTradingRule macdRule,
-    SmaMacdTradingRule smaMacdRule) : ITradeBotSignalService
+    SmaMacdTradingRule smaMacdRule,
+    ILogger<TradeBotSignalService> logger) : ITradeBotSignalService
 {
     // ML action codes returned by the Python sidecar
     private const int MlActionEnterLong  = 1;
@@ -109,7 +110,13 @@ public sealed class TradeBotSignalService(
             .Where(t => t.OpenedAt.HasValue && BacktestSimulationEngine.EasternDay(t.OpenedAt.Value) == today)
             .ToList();
         var currentDailyPnl = todaysTrades.Sum(t => t.Pnl ?? 0m);
-        var currentDailyDrawdown = Math.Max(0m, -currentDailyPnl);
+        var currentDailyDrawdownCash = Math.Max(0m, -currentDailyPnl);
+        // The ML training environment expects current_daily_drawdown as a FRACTION in [0, 1] of the
+        // day-start balance, not absolute cash. day-start = current balance minus today's PnL.
+        var dayStartBalance = tradeBot.TradingAccount.CurrentBalance - currentDailyPnl;
+        var currentDailyDrawdown = dayStartBalance > 0m
+            ? currentDailyDrawdownCash / dayStartBalance
+            : 0m;
         var (winsInRow, lossesInRow) = CountStreaks(closedTrades);
         var lastTrade = closedTrades.FirstOrDefault();
         var candlesSinceLastTradeClosed = await CountCandlesSinceLastTradeClosedAsync(
@@ -145,7 +152,7 @@ public sealed class TradeBotSignalService(
             LossesInRow: lossesInRow,
             TradesTakenToday: todaysTrades.Count,
             DailyProfitTargetReached: policy.DailyProfit > 0m && currentDailyPnl >= policy.DailyProfit,
-            DailyDrawdownReached: policy.DailyDrawdownLimit > 0m && currentDailyDrawdown >= policy.DailyDrawdownLimit,
+            DailyDrawdownReached: policy.DailyDrawdownLimit > 0m && currentDailyDrawdownCash >= policy.DailyDrawdownLimit,
             LastTradePnl: lastTrade?.Pnl ?? 0m,
             LastTradeCloseReason: CloseReasonName(lastTrade),
             CandlesSinceLastTradeClosed: candlesSinceLastTradeClosed,
@@ -157,7 +164,22 @@ public sealed class TradeBotSignalService(
             FeeRate: policy.Fee,
             UnrealizedPnl: 0m);
 
-        var response = await mlConnector.DecideAsync(request, cancellationToken);
+        MlDecideResponse response;
+        try
+        {
+            response = await mlConnector.DecideAsync(request, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // A policy whose live model predates the latest ML release (or any other ML error) is
+            // rejected at inference time. Treat as 'hold' so one policy's failure can't abort the
+            // whole tradebot batch, and so bots stay safe until the policy is retrained.
+            logger.LogWarning(
+                ex,
+                "ML decide failed for policy {PolicyId}; treating as hold.",
+                policy.Id);
+            return new TradeBotSignalResult(TradeBotSignal.None, "ML decide unavailable (treated as hold).");
+        }
 
         return response.Action switch
         {

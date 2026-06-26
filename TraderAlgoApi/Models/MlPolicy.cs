@@ -63,6 +63,57 @@ public sealed class MlPolicy
     [Precision(28, 10)]
     public decimal MaxTrailingDrawdown { get; set; }
 
+    // ---------------------------------------------------------------------
+    // Optional ML training tuning parameters (§3). All nullable: when null the
+    // parameter is omitted from the /train request and the ML service applies its
+    // own default, preserving prior behavior.
+    // ---------------------------------------------------------------------
+
+    /// <summary>Length of each randomized training window in days (ML default 5.0).</summary>
+    public double? EpisodeDays { get; set; }
+
+    /// <summary>Reward penalty per trade entry (ML default 0.05).</summary>
+    public double? EntryCost { get; set; }
+
+    /// <summary>Flat reward penalty per day with no trades (ML default 1.0).</summary>
+    public double? NoTradeDayPenalty { get; set; }
+
+    /// <summary>Win/loss streak reward coefficient (ML default 0.1).</summary>
+    public double? StreakBonusCoef { get; set; }
+
+    /// <summary>Cap on the streak reward (ML default 0.5).</summary>
+    public double? MaxStreakBonus { get; set; }
+
+    /// <summary>Cap on the "sit out low-quality candles" reward (ML default 0.5).</summary>
+    public double? MaxPatienceRewardPerDay { get; set; }
+
+    /// <summary>PPO learning rate (ML default 0.0003).</summary>
+    public double? LearningRate { get; set; }
+
+    /// <summary>Rollout length, fresh models only (ML default 2048).</summary>
+    public int? NSteps { get; set; }
+
+    /// <summary>PPO batch size, fresh models only (ML default 64).</summary>
+    public int? BatchSize { get; set; }
+
+    /// <summary>PPO epochs per update (ML default 10).</summary>
+    public int? NEpochs { get; set; }
+
+    /// <summary>Discount factor (ML default 0.99).</summary>
+    public double? Gamma { get; set; }
+
+    /// <summary>GAE lambda (ML default 0.95).</summary>
+    public double? GaeLambda { get; set; }
+
+    /// <summary>PPO clip range (ML default 0.2).</summary>
+    public double? ClipRange { get; set; }
+
+    /// <summary>Entropy coefficient (ML default 0.01).</summary>
+    public double? EntCoef { get; set; }
+
+    /// <summary>Evaluate the OOS window every N rollouts; higher = faster training (ML default 1).</summary>
+    public int? OosEvalEvery { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
 
     public ICollection<MlTrainingRun> TrainingRuns { get; set; } = [];

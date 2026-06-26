@@ -308,17 +308,20 @@ frontend replay a trained model's decision process the same way a backtest is st
 ```mermaid
 erDiagram
   ml_policies ||--o{ ml_training_runs : "has runs"
-  ml_policies { long Id; int SymbolId; int IntervalId; int TotalTimesteps; decimal hyperparameters }
-  ml_training_runs { long Id; long MlPolicyId; datetimeoffset From; datetimeoffset To; int StatusId; decimal FinalBalance }
+  ml_policies { long Id; int SymbolId; int IntervalId; int TotalTimesteps; decimal riskParams; double tuningParams }
+  ml_training_runs { long Id; long MlPolicyId; datetimeoffset From; datetimeoffset To; int StatusId; decimal FinalBalance; decimal FinalBalanceOos }
 ```
 
 - **`ml_policies`** — a reusable config: symbol/interval + all PPO/risk hyperparameters
   (`totalTimesteps`, `initialBalance`, `quantity`, `takeProfit`, `stopLoss`, `breakeven`,
   `breakevenStop`, `fee`, `slippage`, `dailyProfit`, `dailyDrawdownLimit`, `maxCandlesPerTrade`,
-  `maxTrailingDrawdown`). Live trade bots and backtests running the ML Policy strategy reference a
-  policy by id (`mlPolicyId`); the policy id is also the model identifier sent to the sidecar.
+  `maxTrailingDrawdown`) plus optional [tuning parameters](#optional-tuning-parameters). Live trade
+  bots and backtests running the ML Policy strategy reference a policy by id (`mlPolicyId`); the
+  policy id is also the model identifier sent to the sidecar.
 - **`ml_training_runs`** — one execution of a policy over a date range (model/symbol/interval/params
-  come from the policy); holds only run-specific state: dates, status, and final metrics.
+  come from the policy); holds only run-specific state: dates, status, and final metrics. Metrics are
+  recorded both **in-sample** (`finalBalance`, `pnlPct`) and **out-of-sample** (`finalBalanceOos`,
+  `pnlPctOos`) — see [In-sample vs out-of-sample](#in-sample-vs-out-of-sample-metrics).
 
 **Training flow.**
 
@@ -332,18 +335,64 @@ sequenceDiagram
   API->>ML: POST /train (policy params + run id)
   API-->>UI: { trainingRunId }
   ML->>ML: train PPO (background)
-  ML->>API: PATCH /training-runs/{id}/complete (metrics)
+  ML->>API: PATCH /training-runs/{id}/complete (in-sample + OOS metrics)
   API->>DB: Completed / Failed
+  Note over ML: promotion is gated — a Completed run<br/>is not necessarily the served model
 ```
 
 1. `POST /api/ml/train` takes `{ mlPolicyId, from, to }` (dates only — the controller stores `from`
-   at **00:00** and `to` at **23:59** of the chosen days). It records a run as `Pending`, builds the
-   Python request from the policy, and returns the `trainingRunId`.
+   at **00:00** and `to` at **23:59** of the chosen days, and forwards them to the sidecar as
+   **ISO-8601** `from_date`/`to_date`). It records a run as `Pending`, builds the Python request from
+   the policy, and returns the `trainingRunId`.
 2. The sidecar trains in the background and calls back to `PATCH /api/ml/training-runs/{id}/complete`,
    moving the run `Pending → Running → Completed` (or `Failed`) and recording final balance, PnL %,
-   and trade count.
+   out-of-sample balance/PnL %, and trade count. Terminal states are final: a late or duplicate
+   callback for an already `Completed`/`Failed` run is ignored so it cannot clobber the recorded result.
 3. Each run's deterministic **decision log** is stored uniquely by `trainingRunId` (never
    overwritten), so re-running a policy preserves every run's history.
+4. `POST /api/ml/retrain-all { from, to }` kicks off a run for **every** policy over a shared date
+   range — used for the one-time retrain required after an observation-schema change (see below).
+
+**Observation schema & retraining.** The model's observation vector is versioned. When the sidecar's
+observation format changes, models trained on an older schema are **rejected at inference time** —
+`POST /api/ml/decide` fails for that policy rather than serving garbage. After deploying a sidecar
+release that changes the schema, retrain every policy (one `POST /api/ml/retrain-all`, or a `train`
+per policy). During the migration window the bot path is fault-tolerant: a failed `/decide` is treated
+as **hold** (no entry) and logged, so one un-retrained policy can never abort the whole bot batch.
+
+<a id="in-sample-vs-out-of-sample-metrics"></a>
+**In-sample vs out-of-sample metrics.** Each completed run reports two performance numbers:
+
+| Metric | Fields | Meaning |
+|---|---|---|
+| In-sample | `finalBalance`, `pnlPct` | Full-range result — includes data the model trained on, so it is **optimistic**. |
+| Out-of-sample (OOS) | `finalBalanceOos`, `pnlPctOos` | Result on the held-out tail — the **honest**, generalization-relevant number. `null` when the range was too small to hold out a validation tail. |
+
+Prefer OOS when ranking or judging a model; treat in-sample as a reference only.
+
+**Risk-aware promotion — `Completed` ≠ live.** Finishing a run does **not** make it the served model.
+The sidecar promotes a candidate only if it beats the incumbent on a risk-adjusted basis: it must beat
+the incumbent's OOS PnL by a margin when its OOS drawdown is no worse, otherwise it must beat the
+incumbent's **Calmar ratio** (OOS PnL ÷ trailing drawdown). So a higher-PnL run may intentionally not
+be promoted if it is much riskier. The currently-served model per policy is the source of truth and is
+exposed by `GET /api/ml/models` — do not equate "training completed" with "now serving".
+
+**Durable run status / orphan recovery.** Training runs are background tasks in the sidecar. If the
+sidecar restarts mid-run, on startup it reconciles orphaned runs: any run still in flight is set to
+`Failed` and a `Failed` callback is sent. The API therefore may receive a `Failed` completion for a run
+it only ever saw as `Running`. `Failed` is terminal and the run can simply be retriggered.
+
+<a id="optional-tuning-parameters"></a>
+**Optional tuning parameters.** Policies expose the sidecar's PPO/reward tuning knobs. All are
+**nullable** — when a value is null it is omitted from the `/train` request and the sidecar applies its
+own default, so existing policies are unaffected.
+
+| Group | Parameters (sidecar default) |
+|---|---|
+| Reward shaping | `entryCost` (0.05), `noTradeDayPenalty` (1.0), `streakBonusCoef` (0.1), `maxStreakBonus` (0.5), `maxPatienceRewardPerDay` (0.5) |
+| Episode | `episodeDays` (5.0) |
+| PPO | `learningRate` (0.0003), `nSteps` (2048, fresh only), `batchSize` (64, fresh only), `nEpochs` (10), `gamma` (0.99), `gaeLambda` (0.95), `clipRange` (0.2), `entCoef` (0.01) |
+| OOS eval | `oosEvalEvery` (1 — higher = faster training) |
 
 Risk hyperparameters are **absolute amounts**, consistent with backtests — not fractions.
 `stopLoss`/`takeProfit`/`breakeven`/`breakevenStop` are price offsets from entry, `fee` is a flat
@@ -353,8 +402,9 @@ cash drawdown from peak balance.
 **Decision replay.** `WS /ws/ml/training?trainingRunId={id}` streams the run's candles (from the
 database) zipped with the model's per-candle decisions — emitting `candle` and `mlDecision` frames —
 so entry/hold choices and confidence can be visualised candle-by-candle.
-`GET /api/ml/training-runs/{id}/decisions` returns the same log as a single payload. Deleting a run
-also removes its decision log from the sidecar.
+`GET /api/ml/training-runs/{id}/decisions` returns the same log as a single payload (including
+`oos_pnl_pct` / `oos_final_balance` when available). Deleting a run also removes its decision log from
+the sidecar.
 
 **MLflow tracking.** `GET /api/ml/training-runs/{id}/tracking` returns read-only MLflow metadata,
 params, latest metrics, metric history, and a `rewardMetrics` dashboard linked by the MLflow param
@@ -367,7 +417,19 @@ summary when MLflow data is available. Configure `Mlflow:TrackingUri` or the raw
 read-only queries.
 
 **Inference.** `POST /api/ml/decide` fetches the latest candle+indicators and asks the sidecar for an
-entry action — this is what the live `MlPolicy` strategy and ML backtests call while flat.
+entry action — this is what the live `MlPolicy` strategy and ML backtests call while flat. The
+decision is made on a **closed candle**; the live path enters at that candle's **close** to match the
+training environment.
+
+> **Unit contract (train/serve parity).** The decide payload must use the same units the training
+> environment uses, otherwise the sidecar logs a skew warning and inference degrades:
+> - `current_daily_drawdown` is a **fraction in `[0, 1]`** of the day-start balance — **not cash**.
+> - `current_daily_pnl`, `last_trade_pnl`, `fee_rate`, `unrealized_pnl` are **absolute cash**.
+
+**Served models.** `GET /api/ml/models` is a passthrough to the sidecar's model registry, returning
+per-policy `oosPnlPct`, `oosFinalBalance`, `obsDim`, `schemaVersion`, and `calibrated`. `calibrated`
+indicates whether the model's `confidence` has been fitted to the realized win rate at that
+probability (when a run has enough trades); otherwise `confidence` is the raw policy probability.
 
 ---
 
@@ -408,7 +470,7 @@ REST base path `/api`. Enums (side, status, strategy, etc.) serialize as strings
 | **Backtests** | `POST/GET /backtests` · `GET/DELETE /backtests/{id}` |
 | **Trades** | `POST /trades` · `POST /trades/{id}/stop` · `PATCH /trades/{id}` · `GET /trades/account/{id}/active` · `/history` · `GET /trades/backtest/{id}` |
 | **ML policies** | `GET/POST /ml/policies` · `GET/PUT/DELETE /ml/policies/{id}` |
-| **ML training** | `POST /ml/train` · `POST /ml/decide` · `GET /ml/training-runs` · `GET/DELETE /ml/training-runs/{id}` · `GET /ml/training-runs/{id}/tracking` · `GET /ml/training-runs/{id}/decisions` · `PATCH /ml/training-runs/{id}/complete` |
+| **ML training** | `POST /ml/train` · `POST /ml/retrain-all` · `POST /ml/decide` · `GET /ml/models` · `GET /ml/training-runs` · `GET/DELETE /ml/training-runs/{id}` · `GET /ml/training-runs/{id}/tracking` · `GET /ml/training-runs/{id}/decisions` · `PATCH /ml/training-runs/{id}/complete` |
 | **Rules** | `GET /rules/{sma\|rsi\|macd}/evaluate?symbol=&interval=` |
 | **Charts** | `GET /charts/candles?symbol=&interval=&lookback=` · `GET /charts/candles/indicators` · `GET /charts/candles/indicators/date-interval?from=&to=&symbol=&interval=` |
 | **Symbols / Intervals** | `GET /symbols` · `GET /intervals` |

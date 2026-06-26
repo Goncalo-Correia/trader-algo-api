@@ -52,6 +52,17 @@ public sealed class MlTrainingRun
     [Precision(28, 10)]
     public decimal? PnlPct { get; set; }
 
+    /// <summary>
+    /// Out-of-sample final balance on the held-out tail — the honest, generalization-relevant
+    /// number. Null when the data range was too small to hold out a validation tail.
+    /// </summary>
+    [Precision(28, 10)]
+    public decimal? FinalBalanceOos { get; set; }
+
+    /// <summary>Out-of-sample PnL %. Prefer this over <see cref="PnlPct"/> when ranking models.</summary>
+    [Precision(28, 10)]
+    public decimal? PnlPctOos { get; set; }
+
     public int? NTrades { get; set; }
 
     /// <summary>The Python-side run identifier (MLflow run), filled on completion.</summary>

@@ -51,27 +51,7 @@ public sealed class MlController(
         await dbContext.SaveChangesAsync(cancellationToken);
 
         // Build the Python training request from the policy's configuration.
-        var forwarded = new MlTrainRequest(
-            MlPolicyId:    policy.Id,
-            TrainingRunId: run.Id,
-            Symbol:        policy.Symbol.Code,
-            Interval:      policy.Interval.Code,
-            FromDate:      from.ToString("yyyy-MM-ddTHH:mm:ssZ"),
-            ToDate:        to.ToString("yyyy-MM-ddTHH:mm:ssZ"),
-            ModelId:       policy.Id.ToString(),
-            TotalTimesteps:                policy.TotalTimesteps,
-            InitialBalance:                policy.InitialBalance,
-            Quantity:                      policy.Quantity,
-            StopLoss:                      policy.StopLoss,
-            TakeProfit:                    policy.TakeProfit,
-            Breakeven:                     policy.Breakeven,
-            BreakevenStop:                 policy.BreakevenStop,
-            MaxCandlesPerTrade:            policy.MaxCandlesPerTrade,
-            DailyProfitTarget:             policy.DailyProfit,
-            DailyDrawdownLimit:            policy.DailyDrawdownLimit,
-            FeeRate:                       policy.Fee,
-            SlippageRate:                  policy.Slippage,
-            MaxTrailingDrawdownThreshold:  policy.MaxTrailingDrawdown);
+        var forwarded = BuildTrainRequest(policy, run.Id, from, to);
 
         try
         {
@@ -169,9 +149,16 @@ public sealed class MlController(
         if (!Enum.TryParse<MlTrainingRunStatus>(request.Status, ignoreCase: true, out var status))
             return BadRequest($"Unknown status '{request.Status}'.");
 
+        // Terminal states are final. Ignore late/duplicate callbacks (e.g. an orphan-recovery
+        // 'Failed' arriving after a genuine 'Completed') so they can't clobber the recorded result.
+        if (run.StatusEnum is MlTrainingRunStatus.Completed or MlTrainingRunStatus.Failed)
+            return NoContent();
+
         run.StatusEnum = status;
         run.FinalBalance = request.FinalBalance ?? run.FinalBalance;
         run.PnlPct = request.PnlPct ?? run.PnlPct;
+        run.FinalBalanceOos = request.FinalBalanceOos ?? run.FinalBalanceOos;
+        run.PnlPctOos = request.PnlPctOos ?? run.PnlPctOos;
         run.NTrades = request.NTrades ?? run.NTrades;
         run.RunId = request.RunId ?? run.RunId;
 
@@ -305,6 +292,141 @@ public sealed class MlController(
         return Ok(result);
     }
 
+    /// <summary>
+    /// Lists the models the ML service is currently serving (the live model per policy). Promotion
+    /// is gated and risk-aware, so a Completed training run is not necessarily the served model — use
+    /// this endpoint to know what is actually live.
+    /// </summary>
+    [HttpGet("models")]
+    public async Task<ActionResult<IReadOnlyList<MlModelInfoResponse>>> GetModels(
+        CancellationToken cancellationToken)
+    {
+        var models = await mlConnector.GetModelsAsync(cancellationToken);
+        return Ok(models);
+    }
+
+    /// <summary>
+    /// Kicks off a training run for every policy over a date range. Intended for the one-time,
+    /// post-upgrade retrain required when the ML observation schema changes (models trained before
+    /// the change are rejected at inference time until retrained).
+    /// </summary>
+    [HttpPost("retrain-all")]
+    public async Task<ActionResult<IReadOnlyList<MlTrainStartedResponse>>> RetrainAll(
+        [FromBody] MlRetrainAllRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (request.From > request.To)
+            return BadRequest("'from' must not be after 'to'.");
+
+        var policies = await dbContext.MlPolicies
+            .Include(p => p.Symbol)
+            .Include(p => p.Interval)
+            .ToListAsync(cancellationToken);
+
+        var started = new List<MlTrainStartedResponse>(policies.Count);
+        foreach (var policy in policies)
+        {
+            var result = await StartTrainingAsync(policy, request.From, request.To, cancellationToken);
+            started.Add(result);
+        }
+
+        return Ok(started);
+    }
+
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Records a training run for the policy and forwards it to the ML service. On a forwarding
+    /// failure the run is marked Failed and the returned status reflects that (the batch continues).
+    /// </summary>
+    private async Task<MlTrainStartedResponse> StartTrainingAsync(
+        MlPolicy policy,
+        DateOnly fromDate,
+        DateOnly toDate,
+        CancellationToken cancellationToken)
+    {
+        var from = new DateTimeOffset(fromDate.Year, fromDate.Month, fromDate.Day, 0, 0, 0, TimeSpan.Zero);
+        var to = new DateTimeOffset(toDate.Year, toDate.Month, toDate.Day, 23, 59, 0, TimeSpan.Zero);
+
+        var run = new MlTrainingRun
+        {
+            MlPolicyId = policy.Id,
+            From       = from,
+            To         = to,
+            StartedAt  = timeProvider.GetUtcNow(),
+            StatusEnum = MlTrainingRunStatus.Pending
+        };
+        dbContext.MlTrainingRuns.Add(run);
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        var forwarded = BuildTrainRequest(policy, run.Id, from, to);
+
+        try
+        {
+            await mlConnector.TrainAsync(forwarded, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to start training run {RunId} on the ML service", run.Id);
+            run.StatusEnum = MlTrainingRunStatus.Failed;
+            run.CompletedAt = timeProvider.GetUtcNow();
+            await dbContext.SaveChangesAsync(cancellationToken);
+            return new MlTrainStartedResponse(
+                TrainingRunId: run.Id,
+                Status:        run.StatusEnum,
+                Message:       $"Training run {run.Id} (policy {policy.Id}) failed to start: {ex.Message}");
+        }
+
+        return new MlTrainStartedResponse(
+            TrainingRunId: run.Id,
+            Status:        run.StatusEnum,
+            Message:       $"Training run {run.Id} (policy {policy.Id}) started on " +
+                           $"{policy.Symbol.Code}/{policy.Interval.Code} " +
+                           $"({fromDate:yyyy-MM-dd} -> {toDate:yyyy-MM-dd}).");
+    }
+
+    private static MlTrainRequest BuildTrainRequest(
+        MlPolicy policy,
+        long trainingRunId,
+        DateTimeOffset from,
+        DateTimeOffset to) =>
+        new(
+            MlPolicyId:    policy.Id,
+            TrainingRunId: trainingRunId,
+            Symbol:        policy.Symbol.Code,
+            Interval:      policy.Interval.Code,
+            FromDate:      from.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+            ToDate:        to.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+            ModelId:       policy.Id.ToString(),
+            TotalTimesteps:                policy.TotalTimesteps,
+            InitialBalance:                policy.InitialBalance,
+            Quantity:                      policy.Quantity,
+            StopLoss:                      policy.StopLoss,
+            TakeProfit:                    policy.TakeProfit,
+            Breakeven:                     policy.Breakeven,
+            BreakevenStop:                 policy.BreakevenStop,
+            MaxCandlesPerTrade:            policy.MaxCandlesPerTrade,
+            DailyProfitTarget:             policy.DailyProfit,
+            DailyDrawdownLimit:            policy.DailyDrawdownLimit,
+            FeeRate:                       policy.Fee,
+            SlippageRate:                  policy.Slippage,
+            MaxTrailingDrawdownThreshold:  policy.MaxTrailingDrawdown,
+            EpisodeDays:                   policy.EpisodeDays,
+            EntryCost:                     policy.EntryCost,
+            NoTradeDayPenalty:             policy.NoTradeDayPenalty,
+            StreakBonusCoef:               policy.StreakBonusCoef,
+            MaxStreakBonus:                policy.MaxStreakBonus,
+            MaxPatienceRewardPerDay:       policy.MaxPatienceRewardPerDay,
+            LearningRate:                  policy.LearningRate,
+            NSteps:                        policy.NSteps,
+            BatchSize:                     policy.BatchSize,
+            NEpochs:                       policy.NEpochs,
+            Gamma:                         policy.Gamma,
+            GaeLambda:                     policy.GaeLambda,
+            ClipRange:                     policy.ClipRange,
+            EntCoef:                       policy.EntCoef,
+            OosEvalEvery:                  policy.OosEvalEvery);
+
     // -------------------------------------------------------------------------
 
     private static MlTrainingRunResponse ToDto(
@@ -323,6 +445,8 @@ public sealed class MlController(
             TotalTimesteps: r.Policy.TotalTimesteps,
             FinalBalance:   r.FinalBalance,
             PnlPct:         r.PnlPct,
+            FinalBalanceOos: r.FinalBalanceOos,
+            PnlPctOos:      r.PnlPctOos,
             NTrades:        r.NTrades,
             RunId:          r.RunId,
             Tracking:       tracking);

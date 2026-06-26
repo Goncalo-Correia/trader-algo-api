@@ -12,6 +12,14 @@ public sealed record MlStartTrainingRequest(
     [property: JsonPropertyName("from")]       DateOnly From,
     [property: JsonPropertyName("to")]         DateOnly To);
 
+/// <summary>
+/// Starts a training run for every policy over a shared date range. Used for the one-time,
+/// post-upgrade retrain when the ML observation schema changes.
+/// </summary>
+public sealed record MlRetrainAllRequest(
+    [property: JsonPropertyName("from")] DateOnly From,
+    [property: JsonPropertyName("to")]   DateOnly To);
+
 /// <summary>Returned to the client when a training run is kicked off.</summary>
 public sealed record MlTrainStartedResponse(
     [property: JsonPropertyName("trainingRunId")] long TrainingRunId,
@@ -32,6 +40,8 @@ public sealed record MlTrainingRunResponse(
     [property: JsonPropertyName("totalTimesteps")] int? TotalTimesteps,
     [property: JsonPropertyName("finalBalance")]   decimal? FinalBalance,
     [property: JsonPropertyName("pnlPct")]         decimal? PnlPct,
+    [property: JsonPropertyName("finalBalanceOos")] decimal? FinalBalanceOos,
+    [property: JsonPropertyName("pnlPctOos")]       decimal? PnlPctOos,
     [property: JsonPropertyName("nTrades")]        int? NTrades,
     [property: JsonPropertyName("runId")]          string? RunId,
     [property: JsonPropertyName("tracking")]       MlflowTrainingTrackingSummaryDto? Tracking = null);
@@ -44,5 +54,7 @@ public sealed record MlTrainingRunCompleteRequest(
     [property: JsonPropertyName("status")]        string Status,
     [property: JsonPropertyName("final_balance")] decimal? FinalBalance = null,
     [property: JsonPropertyName("pnl_pct")]       decimal? PnlPct = null,
+    [property: JsonPropertyName("final_balance_oos")] decimal? FinalBalanceOos = null,
+    [property: JsonPropertyName("pnl_pct_oos")]   decimal? PnlPctOos = null,
     [property: JsonPropertyName("n_trades")]      int? NTrades = null,
     [property: JsonPropertyName("run_id")]        string? RunId = null);

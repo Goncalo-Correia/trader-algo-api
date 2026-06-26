@@ -13,6 +13,13 @@ public interface IMlConnectorService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Lists the models the ML service is currently serving (one per policy). This — not a
+    /// Completed training run — is the source of truth for the live model, since promotion is gated.
+    /// </summary>
+    Task<IReadOnlyList<MlModelInfoResponse>> GetModelsAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Fetches a run's deterministic training decision log. Returns null if the run has
     /// no decision log yet (e.g. training not finished / never run).
     /// </summary>
