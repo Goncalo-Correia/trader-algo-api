@@ -1,6 +1,8 @@
 using System.Net;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using TraderAlgoApi.Data;
 using TraderAlgoApi.Dtos.Ml;
 
 namespace TraderAlgoApi.Services.Ml;
@@ -8,55 +10,61 @@ namespace TraderAlgoApi.Services.Ml;
 public sealed class MlflowTrackingRepository(
     IOptions<MlflowOptions> options,
     IConfiguration configuration,
+    MlflowDbContext mlflowDb,
     ILogger<MlflowTrackingRepository> logger) : IMlflowTrackingRepository
 {
     private const string TrainingRunParamKey = "training_run_id";
+    private const string ModelIdParamKey = "model_id";
+
+    // ── Public interface ───────────────────────────────────────────────────────
 
     public async Task<MlflowTrainingTrackingResponse> GetTrackingAsync(
         long trainingRunId,
         bool includeMetricHistory,
         CancellationToken cancellationToken = default)
     {
-        if (!TryGetConnectionString(out var connectionString, out var message))
-            return MlflowTrainingTrackingResponse.Unavailable(trainingRunId, message);
+        if (!options.Value.Enabled)
+            return MlflowTrainingTrackingResponse.Unavailable(trainingRunId, "MLflow tracking is disabled.");
 
         try
         {
-            await using var connection = new NpgsqlConnection(connectionString);
-            await connection.OpenAsync(cancellationToken);
+            var run = await LoadRunEfAsync(trainingRunId, cancellationToken);
+            if (run is null)
+                return MlflowTrainingTrackingResponse.Unavailable(trainingRunId, "Tracking data not available yet.");
 
-            var runs = await LoadRunRowsAsync(connection, trainingRunId, cancellationToken);
-            if (runs.Count == 0)
-                return MlflowTrainingTrackingResponse.Unavailable(
-                    trainingRunId,
-                    "Tracking data not available yet.");
+            // Wave 1 — parallel queries that only need the run UUID
+            var paramsTask         = LoadParamsEfAsync(run.RunUuid, cancellationToken);
+            var latestMetricsTask  = LoadLatestMetricsEfAsync(run.RunUuid, cancellationToken);
+            var metricHistoryTask  = includeMetricHistory
+                ? LoadMetricHistoryEfAsync(run.RunUuid, cancellationToken)
+                : Task.FromResult<Dictionary<string, IReadOnlyList<MlflowMetricPointDto>>>(new());
+            var tagsTask           = LoadTagsAsync(run.RunUuid, cancellationToken);
+            var experimentTask     = LoadExperimentAsync(run.ExperimentId, cancellationToken);
 
-            if (runs.Count > 1)
-                logger.LogWarning(
-                    "Multiple MLflow runs are linked to app training run {TrainingRunId}; using latest run {RunUuid}",
-                    trainingRunId, runs[0].RunUuid);
+            await Task.WhenAll(paramsTask, latestMetricsTask, metricHistoryTask, tagsTask, experimentTask);
 
-            var run = runs[0];
-            var runUuids = new[] { run.RunUuid };
-            var parameters = await LoadParamsAsync(connection, runUuids, cancellationToken);
-            var latestMetrics = await LoadLatestMetricsAsync(connection, runUuids, cancellationToken);
-            var metricHistory = includeMetricHistory
-                ? await LoadMetricHistoryAsync(connection, run.RunUuid, cancellationToken)
-                : new Dictionary<string, IReadOnlyList<MlflowMetricPointDto>>();
+            var parameters    = await paramsTask;
+            var latestMetrics = await latestMetricsTask;
+            var metricHistory = await metricHistoryTask;
+            var tags          = await tagsTask;
+            var experiment    = await experimentTask;
+
+            // Wave 2 — registry lookup requires model_id from params
+            MlflowModelRegistryDto? registry = null;
+            if (parameters.TryGetValue(ModelIdParamKey, out var modelId) &&
+                !string.IsNullOrWhiteSpace(modelId))
+            {
+                registry = await LoadRegistryAsync(modelId, run.RunUuid, cancellationToken);
+            }
 
             return BuildResponse(
-                trainingRunId,
-                run,
-                parameters.GetValueOrDefault(run.RunUuid) ?? new Dictionary<string, string>(),
-                latestMetrics.GetValueOrDefault(run.RunUuid) ?? new Dictionary<string, double?>(),
-                metricHistory);
+                trainingRunId, run, parameters, latestMetrics, metricHistory,
+                tags, experiment, registry);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogWarning(ex, "Unable to load MLflow tracking data for training run {TrainingRunId}", trainingRunId);
-            return MlflowTrainingTrackingResponse.Unavailable(
-                trainingRunId,
-                "MLflow tracking data unavailable.");
+            return MlflowTrainingTrackingResponse.Unavailable(trainingRunId, "MLflow tracking data unavailable.");
         }
     }
 
@@ -101,8 +109,7 @@ public sealed class MlflowTrackingRepository(
             {
                 if (!latestRuns.TryGetValue(id, out var run))
                 {
-                    result[id] = MlflowTrainingTrackingSummaryDto.Unavailable(
-                        "Tracking data not available yet.");
+                    result[id] = MlflowTrainingTrackingSummaryDto.Unavailable("Tracking data not available yet.");
                     continue;
                 }
 
@@ -111,7 +118,10 @@ public sealed class MlflowTrackingRepository(
                     run,
                     parameters.GetValueOrDefault(run.RunUuid) ?? new Dictionary<string, string>(),
                     latestMetrics.GetValueOrDefault(run.RunUuid) ?? new Dictionary<string, double?>(),
-                    new Dictionary<string, IReadOnlyList<MlflowMetricPointDto>>())
+                    new Dictionary<string, IReadOnlyList<MlflowMetricPointDto>>(),
+                    tags: null,
+                    experiment: null,
+                    registry: null)
                     .ToSummary();
             }
 
@@ -125,6 +135,329 @@ public sealed class MlflowTrackingRepository(
                 _ => MlflowTrainingTrackingSummaryDto.Unavailable("MLflow tracking data unavailable."));
         }
     }
+
+    // ── EF Core query methods (used by GetTrackingAsync) ──────────────────────
+
+    private async Task<MlflowRunRow?> LoadRunEfAsync(
+        long trainingRunId,
+        CancellationToken cancellationToken)
+    {
+        var trainingRunIdText = trainingRunId.ToString();
+
+        var row = await mlflowDb.Runs
+            .AsNoTracking()
+            .Join(
+                mlflowDb.Params.AsNoTracking()
+                    .Where(p => p.Key == TrainingRunParamKey && p.Value == trainingRunIdText),
+                run => run.RunUuid,
+                param => param.RunUuid,
+                (run, _) => run)
+            .OrderByDescending(r => r.StartTime)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (row is null)
+            return null;
+
+        if (await mlflowDb.Runs
+                .AsNoTracking()
+                .Join(
+                    mlflowDb.Params.AsNoTracking()
+                        .Where(p => p.Key == TrainingRunParamKey && p.Value == trainingRunIdText),
+                    run => run.RunUuid,
+                    param => param.RunUuid,
+                    (run, _) => run)
+                .CountAsync(cancellationToken) > 1)
+        {
+            logger.LogWarning(
+                "Multiple MLflow runs are linked to app training run {TrainingRunId}; using latest run {RunUuid}",
+                trainingRunId, row.RunUuid);
+        }
+
+        return new MlflowRunRow(
+            TrainingRunId: trainingRunId,
+            RunUuid: row.RunUuid,
+            RunName: row.Name,
+            Status: row.Status,
+            StartTime: row.StartTime is long s ? FromUnixMilliseconds(s) : null,
+            EndTime: row.EndTime is long e ? FromUnixMilliseconds(e) : null,
+            ArtifactUri: row.ArtifactUri,
+            ExperimentId: row.ExperimentId);
+    }
+
+    private async Task<Dictionary<string, string>> LoadParamsEfAsync(
+        string runUuid,
+        CancellationToken cancellationToken)
+    {
+        var rows = await mlflowDb.Params
+            .AsNoTracking()
+            .Where(p => p.RunUuid == runUuid)
+            .OrderBy(p => p.Key)
+            .ToListAsync(cancellationToken);
+
+        return rows.ToDictionary(
+            p => p.Key,
+            p => p.Value ?? string.Empty,
+            StringComparer.Ordinal);
+    }
+
+    private async Task<Dictionary<string, double?>> LoadLatestMetricsEfAsync(
+        string runUuid,
+        CancellationToken cancellationToken)
+    {
+        var rows = await mlflowDb.LatestMetrics
+            .AsNoTracking()
+            .Where(m => m.RunUuid == runUuid && !m.IsNan)
+            .OrderBy(m => m.Key)
+            .ToListAsync(cancellationToken);
+
+        return rows
+            .Where(m => !double.IsNaN(m.Value))
+            .ToDictionary(m => m.Key, m => (double?)m.Value, StringComparer.Ordinal);
+    }
+
+    private async Task<Dictionary<string, IReadOnlyList<MlflowMetricPointDto>>> LoadMetricHistoryEfAsync(
+        string runUuid,
+        CancellationToken cancellationToken)
+    {
+        var rows = await mlflowDb.Metrics
+            .AsNoTracking()
+            .Where(m => m.RunUuid == runUuid && !m.IsNan)
+            .OrderBy(m => m.Key)
+            .ThenBy(m => m.Step)
+            .ThenBy(m => m.Timestamp)
+            .ToListAsync(cancellationToken);
+
+        var grouped = new Dictionary<string, List<MlflowMetricPointDto>>(StringComparer.Ordinal);
+        foreach (var m in rows)
+        {
+            if (double.IsNaN(m.Value))
+                continue;
+
+            if (!grouped.TryGetValue(m.Key, out var points))
+            {
+                points = [];
+                grouped[m.Key] = points;
+            }
+
+            points.Add(new MlflowMetricPointDto(
+                Step: m.Step,
+                Value: m.Value,
+                Timestamp: FromUnixMilliseconds(m.Timestamp)));
+        }
+
+        return grouped.ToDictionary(
+            pair => pair.Key,
+            pair => (IReadOnlyList<MlflowMetricPointDto>)pair.Value);
+    }
+
+    private async Task<MlflowRunTagsDto?> LoadTagsAsync(
+        string runUuid,
+        CancellationToken cancellationToken)
+    {
+        string[] knownKeys = ["mlflow.user", "mlflow.source.name", "mlflow.source.type"];
+
+        var rows = await mlflowDb.Tags
+            .AsNoTracking()
+            .Where(t => t.RunUuid == runUuid && knownKeys.Contains(t.Key))
+            .ToListAsync(cancellationToken);
+
+        if (rows.Count == 0)
+            return null;
+
+        var lookup = rows.ToDictionary(t => t.Key, t => t.Value);
+        return new MlflowRunTagsDto(
+            User:       lookup.GetValueOrDefault("mlflow.user"),
+            SourceName: lookup.GetValueOrDefault("mlflow.source.name"),
+            SourceType: lookup.GetValueOrDefault("mlflow.source.type"));
+    }
+
+    private async Task<MlflowExperimentInfoDto?> LoadExperimentAsync(
+        int? experimentId,
+        CancellationToken cancellationToken)
+    {
+        if (experimentId is null)
+            return null;
+
+        var exp = await mlflowDb.Experiments
+            .AsNoTracking()
+            .Where(e => e.ExperimentId == experimentId)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (exp is null)
+            return null;
+
+        return new MlflowExperimentInfoDto(
+            ExperimentId:   exp.ExperimentId,
+            Name:           exp.Name,
+            LifecycleStage: exp.LifecycleStage,
+            CreationTime:   exp.CreationTime is long ct ? FromUnixMilliseconds(ct) : null);
+    }
+
+    private async Task<MlflowModelRegistryDto?> LoadRegistryAsync(
+        string modelName,
+        string runUuid,
+        CancellationToken cancellationToken)
+    {
+        var registeredModelTask = mlflowDb.RegisteredModels
+            .AsNoTracking()
+            .Where(m => m.Name == modelName)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var versionsTask = mlflowDb.ModelVersions
+            .AsNoTracking()
+            .Where(v => v.Name == modelName)
+            .OrderBy(v => v.Version)
+            .ToListAsync(cancellationToken);
+
+        await Task.WhenAll(registeredModelTask, versionsTask);
+
+        var registeredModel = await registeredModelTask;
+        if (registeredModel is null)
+            return null;
+
+        var versions = await versionsTask;
+        var versionDtos = versions.Select(v => new MlflowModelVersionDto(
+            Version:         v.Version,
+            CurrentStage:    v.CurrentStage,
+            Source:          v.Source,
+            StorageLocation: v.StorageLocation,
+            CreationTime:    v.CreationTime is long ct ? FromUnixMilliseconds(ct) : null,
+            Description:     v.Description,
+            RunId:           v.RunId)).ToList();
+
+        var thisRunVersion = versionDtos.FirstOrDefault(v =>
+            string.Equals(v.RunId, runUuid, StringComparison.OrdinalIgnoreCase));
+
+        return new MlflowModelRegistryDto(
+            ModelName:        registeredModel.Name,
+            ModelDescription: registeredModel.Description,
+            RegisteredAt:     registeredModel.CreationTime is long rt ? FromUnixMilliseconds(rt) : null,
+            ThisRunVersion:   thisRunVersion,
+            AllVersions:      versionDtos);
+    }
+
+    // ── Response builder ───────────────────────────────────────────────────────
+
+    private static MlflowTrainingTrackingResponse BuildResponse(
+        long trainingRunId,
+        MlflowRunRow run,
+        IReadOnlyDictionary<string, string> parameters,
+        IReadOnlyDictionary<string, double?> latestMetrics,
+        IReadOnlyDictionary<string, IReadOnlyList<MlflowMetricPointDto>> metricHistory,
+        MlflowRunTagsDto? tags,
+        MlflowExperimentInfoDto? experiment,
+        MlflowModelRegistryDto? registry)
+    {
+        var evalMetrics = latestMetrics
+            .Where(kv => kv.Key.StartsWith("eval/", StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
+
+        var ppoInternals = new MlflowPpoInternalsDto(
+            PolicyGradientLoss: Metric(latestMetrics, metricHistory,
+                "Policy gradient loss", "train/policy_gradient_loss"),
+            ValueLoss: Metric(latestMetrics, metricHistory,
+                "Value loss", "train/value_loss"),
+            EntropyLoss: Metric(latestMetrics, metricHistory,
+                "Entropy loss", "train/entropy_loss"),
+            ApproxKl: Metric(latestMetrics, metricHistory,
+                "Approx KL", "train/approx_kl"),
+            ClipFraction: Metric(latestMetrics, metricHistory,
+                "Clip fraction", "train/clip_fraction"),
+            ExplainedVariance: Metric(latestMetrics, metricHistory,
+                "Explained variance", "train/explained_variance"),
+            EpRewMean: Metric(latestMetrics, metricHistory,
+                "Episode reward mean", "rollout/ep_rew_mean"),
+            EpLenMean: Metric(latestMetrics, metricHistory,
+                "Episode length mean", "rollout/ep_len_mean"));
+
+        return new MlflowTrainingTrackingResponse(
+            TrainingRunId:    trainingRunId,
+            TrackingAvailable: true,
+            MlflowRunUuid:   run.RunUuid,
+            RunName:          run.RunName,
+            Status:           run.Status,
+            StartTime:        run.StartTime,
+            EndTime:          run.EndTime,
+            ArtifactUri:      run.ArtifactUri,
+            Params:           parameters,
+            RewardMetrics:    MlflowRewardTrackingDashboardDto.From(latestMetrics, metricHistory),
+            LatestMetrics:    latestMetrics,
+            MetricHistory:    metricHistory,
+            Experiment:       experiment,
+            Tags:             tags,
+            Registry:         registry,
+            PpoInternals:     ppoInternals,
+            EvalMetrics:      evalMetrics.Count > 0 ? evalMetrics : null);
+    }
+
+    // ── Metric helper (mirrors MlflowRewardTrackingDashboardDto.Metric) ────────
+
+    private static MlflowTrackedMetricDto Metric(
+        IReadOnlyDictionary<string, double?> latestMetrics,
+        IReadOnlyDictionary<string, IReadOnlyList<MlflowMetricPointDto>> metricHistory,
+        string label,
+        params string[] candidateKeys)
+    {
+        var key = FindMetricKey(latestMetrics, metricHistory, candidateKeys);
+        var history = key is not null ? FindMetricHistory(metricHistory, key) : [];
+        var latestValue = key is not null && TryGetLatestMetricValue(latestMetrics, key, out var value)
+            ? value
+            : history.LastOrDefault()?.Value;
+
+        return new MlflowTrackedMetricDto(
+            Key: key,
+            Label: label,
+            WhatItChecks: string.Empty,
+            LatestValue: latestValue,
+            History: history);
+    }
+
+    private static bool TryGetLatestMetricValue(
+        IReadOnlyDictionary<string, double?> latestMetrics,
+        string metricKey,
+        out double? value)
+    {
+        var key = latestMetrics.Keys.FirstOrDefault(
+            candidate => candidate.Equals(metricKey, StringComparison.OrdinalIgnoreCase));
+        if (key is not null)
+            return latestMetrics.TryGetValue(key, out value);
+
+        value = null;
+        return false;
+    }
+
+    private static IReadOnlyList<MlflowMetricPointDto> FindMetricHistory(
+        IReadOnlyDictionary<string, IReadOnlyList<MlflowMetricPointDto>> metricHistory,
+        string metricKey)
+    {
+        var key = metricHistory.Keys.FirstOrDefault(
+            candidate => candidate.Equals(metricKey, StringComparison.OrdinalIgnoreCase));
+
+        return key is not null && metricHistory.TryGetValue(key, out var points) ? points : [];
+    }
+
+    private static string? FindMetricKey(
+        IReadOnlyDictionary<string, double?> latestMetrics,
+        IReadOnlyDictionary<string, IReadOnlyList<MlflowMetricPointDto>> metricHistory,
+        params string[] candidateKeys)
+    {
+        foreach (var candidateKey in candidateKeys)
+        {
+            var latestKey = latestMetrics.Keys.FirstOrDefault(
+                key => key.Equals(candidateKey, StringComparison.OrdinalIgnoreCase));
+            if (latestKey is not null)
+                return latestKey;
+
+            var historyKey = metricHistory.Keys.FirstOrDefault(
+                key => key.Equals(candidateKey, StringComparison.OrdinalIgnoreCase));
+            if (historyKey is not null)
+                return historyKey;
+        }
+
+        return null;
+    }
+
+    // ── Raw Npgsql helpers (used by GetTrackingSummariesAsync only) ────────────
 
     private bool TryGetConnectionString(out string connectionString, out string? message)
     {
@@ -226,44 +559,16 @@ public sealed class MlflowTrackingRepository(
 
             return WebUtility.UrlDecode(pieces[1]).ToLowerInvariant() switch
             {
-                "disable" => SslMode.Disable,
-                "allow" => SslMode.Allow,
-                "prefer" => SslMode.Prefer,
-                "verify-ca" => SslMode.VerifyCA,
+                "disable"     => SslMode.Disable,
+                "allow"       => SslMode.Allow,
+                "prefer"      => SslMode.Prefer,
+                "verify-ca"   => SslMode.VerifyCA,
                 "verify-full" => SslMode.VerifyFull,
-                _ => SslMode.Require
+                _             => SslMode.Require
             };
         }
 
         return SslMode.Require;
-    }
-
-    private static async Task<List<MlflowRunRow>> LoadRunRowsAsync(
-        NpgsqlConnection connection,
-        long trainingRunId,
-        CancellationToken cancellationToken)
-    {
-        const string sql = """
-            SELECT p.value AS training_run_id,
-                   r.run_uuid,
-                   r.name,
-                   r.status,
-                   r.start_time,
-                   r.end_time,
-                   r.artifact_uri
-            FROM runs r
-            JOIN params p ON p.run_uuid = r.run_uuid
-            WHERE p.key = @paramKey
-              AND p.value = @trainingRunIdText
-            ORDER BY r.start_time DESC NULLS LAST
-            LIMIT 2;
-            """;
-
-        await using var command = new NpgsqlCommand(sql, connection);
-        command.Parameters.AddWithValue("paramKey", TrainingRunParamKey);
-        command.Parameters.AddWithValue("trainingRunIdText", trainingRunId.ToString());
-
-        return await ReadRunRowsAsync(command, cancellationToken);
     }
 
     private static async Task<List<MlflowRunRow>> LoadRunRowsAsync(
@@ -397,70 +702,7 @@ public sealed class MlflowTrackingRepository(
         return result;
     }
 
-    private static async Task<Dictionary<string, IReadOnlyList<MlflowMetricPointDto>>> LoadMetricHistoryAsync(
-        NpgsqlConnection connection,
-        string runUuid,
-        CancellationToken cancellationToken)
-    {
-        const string sql = """
-            SELECT key, value, timestamp, step, COALESCE(is_nan, false) AS is_nan
-            FROM metrics
-            WHERE run_uuid = @runUuid
-            ORDER BY key, step, timestamp;
-            """;
-
-        await using var command = new NpgsqlCommand(sql, connection);
-        command.Parameters.AddWithValue("runUuid", runUuid);
-
-        var grouped = new Dictionary<string, List<MlflowMetricPointDto>>(StringComparer.Ordinal);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            var isNan = reader.GetBoolean(4);
-            if (isNan)
-                continue;
-
-            var value = reader.GetDouble(1);
-            if (double.IsNaN(value))
-                continue;
-
-            var key = reader.GetString(0);
-            if (!grouped.TryGetValue(key, out var points))
-            {
-                points = [];
-                grouped[key] = points;
-            }
-
-            points.Add(new MlflowMetricPointDto(
-                Step: reader.GetInt64(3),
-                Value: value,
-                Timestamp: FromUnixMilliseconds(reader.GetInt64(2))));
-        }
-
-        return grouped.ToDictionary(
-            pair => pair.Key,
-            pair => (IReadOnlyList<MlflowMetricPointDto>)pair.Value);
-    }
-
-    private static MlflowTrainingTrackingResponse BuildResponse(
-        long trainingRunId,
-        MlflowRunRow run,
-        IReadOnlyDictionary<string, string> parameters,
-        IReadOnlyDictionary<string, double?> latestMetrics,
-        IReadOnlyDictionary<string, IReadOnlyList<MlflowMetricPointDto>> metricHistory) =>
-        new(
-            TrainingRunId: trainingRunId,
-            TrackingAvailable: true,
-            MlflowRunUuid: run.RunUuid,
-            RunName: run.RunName,
-            Status: run.Status,
-            StartTime: run.StartTime,
-            EndTime: run.EndTime,
-            ArtifactUri: run.ArtifactUri,
-            Params: parameters,
-            RewardMetrics: MlflowRewardTrackingDashboardDto.From(latestMetrics, metricHistory),
-            LatestMetrics: latestMetrics,
-            MetricHistory: metricHistory);
+    // ── Shared utilities ───────────────────────────────────────────────────────
 
     private static DateTimeOffset FromUnixMilliseconds(long timestamp) =>
         DateTimeOffset.FromUnixTimeMilliseconds(timestamp);
@@ -472,5 +714,6 @@ public sealed class MlflowTrackingRepository(
         string? Status,
         DateTimeOffset? StartTime,
         DateTimeOffset? EndTime,
-        string? ArtifactUri);
+        string? ArtifactUri,
+        int? ExperimentId = null);
 }

@@ -527,6 +527,43 @@ public sealed record MlflowRewardTrackingDashboardDto(
     }
 }
 
+public sealed record MlflowExperimentInfoDto(
+    [property: JsonPropertyName("experimentId")]    int ExperimentId,
+    [property: JsonPropertyName("name")]            string Name,
+    [property: JsonPropertyName("lifecycleStage")] string? LifecycleStage,
+    [property: JsonPropertyName("creationTime")]   DateTimeOffset? CreationTime);
+
+public sealed record MlflowRunTagsDto(
+    [property: JsonPropertyName("user")]       string? User,
+    [property: JsonPropertyName("sourceName")] string? SourceName,
+    [property: JsonPropertyName("sourceType")] string? SourceType);
+
+public sealed record MlflowModelVersionDto(
+    [property: JsonPropertyName("version")]         int Version,
+    [property: JsonPropertyName("currentStage")]    string? CurrentStage,
+    [property: JsonPropertyName("source")]          string? Source,
+    [property: JsonPropertyName("storageLocation")] string? StorageLocation,
+    [property: JsonPropertyName("creationTime")]    DateTimeOffset? CreationTime,
+    [property: JsonPropertyName("description")]     string? Description,
+    [property: JsonPropertyName("runId")]           string? RunId);
+
+public sealed record MlflowModelRegistryDto(
+    [property: JsonPropertyName("modelName")]        string ModelName,
+    [property: JsonPropertyName("modelDescription")] string? ModelDescription,
+    [property: JsonPropertyName("registeredAt")]     DateTimeOffset? RegisteredAt,
+    [property: JsonPropertyName("thisRunVersion")]   MlflowModelVersionDto? ThisRunVersion,
+    [property: JsonPropertyName("allVersions")]      IReadOnlyList<MlflowModelVersionDto> AllVersions);
+
+public sealed record MlflowPpoInternalsDto(
+    [property: JsonPropertyName("policyGradientLoss")] MlflowTrackedMetricDto PolicyGradientLoss,
+    [property: JsonPropertyName("valueLoss")]           MlflowTrackedMetricDto ValueLoss,
+    [property: JsonPropertyName("entropyLoss")]         MlflowTrackedMetricDto EntropyLoss,
+    [property: JsonPropertyName("approxKl")]            MlflowTrackedMetricDto ApproxKl,
+    [property: JsonPropertyName("clipFraction")]        MlflowTrackedMetricDto ClipFraction,
+    [property: JsonPropertyName("explainedVariance")]   MlflowTrackedMetricDto ExplainedVariance,
+    [property: JsonPropertyName("epRewMean")]           MlflowTrackedMetricDto EpRewMean,
+    [property: JsonPropertyName("epLenMean")]           MlflowTrackedMetricDto EpLenMean);
+
 public sealed record MlflowTrainingTrackingResponse(
     [property: JsonPropertyName("trainingRunId")]      long TrainingRunId,
     [property: JsonPropertyName("trackingAvailable")] bool TrackingAvailable,
@@ -540,7 +577,12 @@ public sealed record MlflowTrainingTrackingResponse(
     [property: JsonPropertyName("rewardMetrics")]     MlflowRewardTrackingDashboardDto RewardMetrics,
     [property: JsonPropertyName("latestMetrics")]     IReadOnlyDictionary<string, double?> LatestMetrics,
     [property: JsonPropertyName("metricHistory")]     IReadOnlyDictionary<string, IReadOnlyList<MlflowMetricPointDto>> MetricHistory,
-    [property: JsonPropertyName("message")]           string? Message = null)
+    [property: JsonPropertyName("message")]           string? Message = null,
+    [property: JsonPropertyName("experiment")]        MlflowExperimentInfoDto? Experiment = null,
+    [property: JsonPropertyName("tags")]              MlflowRunTagsDto? Tags = null,
+    [property: JsonPropertyName("registry")]          MlflowModelRegistryDto? Registry = null,
+    [property: JsonPropertyName("ppoInternals")]      MlflowPpoInternalsDto? PpoInternals = null,
+    [property: JsonPropertyName("evalMetrics")]       IReadOnlyDictionary<string, double?>? EvalMetrics = null)
 {
     public static MlflowTrainingTrackingResponse Unavailable(
         long trainingRunId,

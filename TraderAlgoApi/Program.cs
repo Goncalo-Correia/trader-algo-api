@@ -54,6 +54,8 @@ var connectionString = builder.Configuration.GetConnectionString("Supabase");
 void ConfigureDb(DbContextOptionsBuilder options) => options.UseNpgsql(connectionString);
 builder.Services.AddDbContext<ApplicationDbContext>(ConfigureDb);
 builder.Services.AddDbContextFactory<ApplicationDbContext>(ConfigureDb, ServiceLifetime.Scoped);
+builder.Services.AddDbContext<MlflowDbContext>(ConfigureDb);
+builder.Services.AddDbContextFactory<MlflowDbContext>(ConfigureDb, ServiceLifetime.Scoped);
 
 builder.Services.AddSingleton(TimeProvider.System);
 
