@@ -160,14 +160,14 @@ public sealed class IndicatorSyncService(
         DateTimeOffset to,
         CancellationToken cancellationToken)
     {
-        logger.LogInformation(
+        logger.LogDebug(
             "Syncing indicators for {Symbol}/{Interval} [{From}..{To}]",
             symbol.Code, interval.Code, from, to);
 
         var (inserted, updated, skipped) = await SyncRangeInternalAsync(
             symbol.Id, interval.Id, from, to, cancellationToken);
 
-        logger.LogInformation(
+        logger.LogDebug(
             "Indicators synced for {Symbol}/{Interval}: {Inserted} inserted, {Updated} updated, {Skipped} skipped",
             symbol.Code, interval.Code, inserted, updated, skipped);
 

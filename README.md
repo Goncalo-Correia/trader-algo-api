@@ -507,13 +507,34 @@ as the nesting separator. On a restart, the new levels take effect immediately.
 
 Levels, most to least verbose: `Trace` → `Debug` → `Information` → `Warning` → `Error` → `Critical`
 → `None`. Categories are the class's namespace + name (the `T` in `ILogger<T>`); the most specific
-match wins.
+match wins. `Logging__LogLevel__TraderAlgoApi=<level>` adjusts every app service at once, or target a
+single feature with the categories below.
 
-| Goal | Environment variable |
+**Quiet down (high steady-state volume).** Set these to `Warning` to suppress routine chatter:
+
+| Feature | Category |
 |---|---|
-| Quiet everything to warnings and errors | `Logging__LogLevel__Default=Warning` |
-| Silence just the data collector (its nightly/full syncs are the noisiest) | `Logging__LogLevel__TraderAlgoApi.Services.DataCollector=None` |
-| Silence all app logs but keep framework warnings | `Logging__LogLevel__TraderAlgoApi=Warning` |
+| Data collection (nightly / full syncs) | `TraderAlgoApi.Services.DataCollector` |
+| Live market ingest (per-candle storage) | `TraderAlgoApi.Services.Binance` |
+| Indicator recompute (paired with every candle) | `TraderAlgoApi.Services.Indicators` |
+
+**Turn up for debugging.** These are quiet by default but expose rich per-tick / per-candle
+diagnostics at `Debug`:
+
+| Feature | Category | What `Debug` reveals |
+|---|---|---|
+| Trades — SL/TP & limit fills | `TraderAlgoApi.Services.Trades` | Per-tick stop/target/limit evaluation |
+| Trade bots | `TraderAlgoApi.Services.TradeBots` | Per-candle reason a bot did/didn't enter |
+| ML decisions & training | `TraderAlgoApi.Services.Ml` | `/decide` and `/train` sidecar request payloads |
+| Raw SQL (EF Core) | `Microsoft.EntityFrameworkCore.Database.Command` | Every SQL statement (very noisy) |
+
+Examples:
+
+```dotenv
+Logging__LogLevel__Default=Warning                          # quiet everything to warnings+errors
+Logging__LogLevel__TraderAlgoApi.Services.DataCollector=None  # silence the data collector entirely
+Logging__LogLevel__TraderAlgoApi.Services.Trades=Debug      # trace SL/TP/limit fills
+```
 
 > **Swagger** is exposed in every environment by default and served at `/swagger`. Set
 > `Swagger__Enabled=false` (config key `Swagger:Enabled`) to turn it off without a redeploy.

@@ -162,7 +162,7 @@ public sealed class BinanceKlineStreamingService(
             kline.OpenTime, kline.Open, kline.High, kline.Low, kline.Close,
             kline.Volume);
 
-        logger.LogInformation(
+        logger.LogDebug(
             "Stored closed kline {Symbol}/{Interval} {OpenTime}",
             kline.Symbol, kline.Interval, kline.OpenTime);
     }
