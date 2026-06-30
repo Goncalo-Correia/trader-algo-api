@@ -611,7 +611,7 @@ Requires the **.NET 10 SDK** and a PostgreSQL database (Supabase or local).
 
    ```bash
    cd TraderAlgoApi
-   dotnet user-secrets set "ConnectionStrings:Supabase" "Host=...;Database=postgres;Username=...;Password=...;SSL Mode=VerifyFull;Root Certificate=/path/to/supabase-ca.crt"
+   dotnet user-secrets set "ConnectionStrings:Supabase" "Host=...;Database=postgres;Username=...;Password=...;SSL Mode=Require"
    dotnet user-secrets set "Mlflow:TrackingUri" "postgresql://USER:PASSWORD@HOST:5432/postgres?sslmode=require"
    dotnet user-secrets set "ApiKey" "<a-long-random-string>"
    ```
@@ -620,12 +620,14 @@ Requires the **.NET 10 SDK** and a PostgreSQL database (Supabase or local).
    `ApiKey` environment variable (e.g. on Render). See [Authentication](#authentication) for how
    callers present it.
 
-   > **TLS to the database.** `SSL Mode=VerifyFull` validates the server certificate and hostname,
-   > which needs Supabase's root CA — download it from the Supabase dashboard
-   > (*Project Settings → Database → SSL configuration*) and point `Root Certificate` at the file.
-   > If providing the CA is impractical in your host, `SSL Mode=Require` (encrypt without validation)
-   > is the weaker fallback — but never `Trust Server Certificate=true`, which accepts any cert and
-   > defeats the purpose.
+   > **TLS to the database.** `SSL Mode=Require` encrypts the connection but does not validate the
+   > server certificate — use it as the default, because Supabase's pooler cert is signed by a
+   > private CA that isn't in the standard trust store, so `VerifyFull` fails with a certificate
+   > error unless you supply that CA. To harden to full validation (chain + hostname), download
+   > Supabase's root CA (*Project Settings → Database → SSL configuration*), make it available to the
+   > app (e.g. `COPY` it into the Docker image), and use
+   > `SSL Mode=VerifyFull;Root Certificate=/path/to/supabase-ca.crt`. Avoid
+   > `Trust Server Certificate=true` — it's redundant with `Require` here and only adds noise.
 
    If the API runs in Docker, pass the MLflow tracking database through the container environment:
 
