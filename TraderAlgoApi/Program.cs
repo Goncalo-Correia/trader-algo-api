@@ -7,6 +7,7 @@ using TraderAlgoApi.Services.Backtests;
 using TraderAlgoApi.Services.Charts;
 using TraderAlgoApi.Services.DataCollector;
 using TraderAlgoApi.Services.Indicators;
+using TraderAlgoApi.Services.Jobs;
 using TraderAlgoApi.Services.Kronos;
 using TraderAlgoApi.Services.MarketData;
 using TraderAlgoApi.Services.Ml;
@@ -104,6 +105,12 @@ builder.Services.AddScoped<IIndicatorSyncService, IndicatorSyncService>();
 // ── Data collection ───────────────────────────────────────────────────────────
 builder.Services.AddScoped<IBinanceDataCollectorService, BinanceDataCollectorService>();
 builder.Services.AddHostedService<DataCollectorTimer>();
+
+// ── Background sync jobs (data collection / indicator recompute) ────────────────
+builder.Services.AddSingleton<IBackgroundJobQueue, BackgroundJobQueue>();
+builder.Services.AddSingleton<ISyncJobExecutor, SyncJobExecutor>();
+builder.Services.AddScoped<ISyncJobService, SyncJobService>();
+builder.Services.AddHostedService<SyncJobWorker>();
 
 // ── Live charts ───────────────────────────────────────────────────────────────
 builder.Services.AddScoped<ILiveChartDataService, LiveChartDataService>();

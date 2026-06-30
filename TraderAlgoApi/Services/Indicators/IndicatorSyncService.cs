@@ -17,121 +17,75 @@ public sealed class IndicatorSyncService(
     // and comfortably covers the SMA-100 look-back window.
     private const int ContextSize = 200;
 
-    public async Task<IReadOnlyList<IndicatorSyncResult>> FullSyncAsync(CancellationToken cancellationToken = default)
+    public async Task<IndicatorSyncResult> FullSyncPairAsync(
+        Symbol symbol,
+        Interval interval,
+        CancellationToken cancellationToken = default)
     {
-        var symbols = await dbContext.Symbols
+        var from = await dbContext.KlineData
             .AsNoTracking()
-            .Where(s => s.IsActive)
-            .OrderBy(s => s.Code)
-            .ToListAsync(cancellationToken);
+            .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id)
+            .MinAsync(k => (DateTimeOffset?)k.OpenTime, cancellationToken);
 
-        var intervals = await dbContext.Intervals
+        if (from is null)
+            return new IndicatorSyncResult(symbol.Code, interval.Code, 0, 0, 0);
+
+        var to = await dbContext.KlineData
             .AsNoTracking()
-            .Where(i => i.IsActive)
-            .OrderBy(i => i.Duration)
-            .ToListAsync(cancellationToken);
+            .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id)
+            .MaxAsync(k => k.OpenTime, cancellationToken);
 
-        var results = new List<IndicatorSyncResult>();
-
-        foreach (var symbol in symbols)
-        {
-            foreach (var interval in intervals)
-            {
-                var from = await dbContext.KlineData
-                    .AsNoTracking()
-                    .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id)
-                    .MinAsync(k => (DateTimeOffset?)k.OpenTime, cancellationToken);
-
-                if (from is null)
-                {
-                    results.Add(new IndicatorSyncResult(symbol.Code, interval.Code, 0, 0, 0));
-                    continue;
-                }
-
-                var to = await dbContext.KlineData
-                    .AsNoTracking()
-                    .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id)
-                    .MaxAsync(k => k.OpenTime, cancellationToken);
-
-                var result = await SyncRangeAsync(symbol, interval, from.Value, to, cancellationToken);
-                results.Add(result);
-            }
-        }
-
-        return results;
+        return await SyncRangeAsync(symbol, interval, from.Value, to, cancellationToken);
     }
 
-    public async Task<IReadOnlyList<IndicatorSyncResult>> PartialSyncAsync(CancellationToken cancellationToken = default)
+    public async Task<IndicatorSyncResult> PartialSyncPairAsync(
+        Symbol symbol,
+        Interval interval,
+        CancellationToken cancellationToken = default)
     {
-        var symbols = await dbContext.Symbols
+        // Find the earliest candle missing any indicator row.
+        // Querying each indicator separately is more efficient than a multi-OR join,
+        // and ensures partial sync catches newly added indicator types automatically.
+        var fromSma = await dbContext.KlineData
             .AsNoTracking()
-            .Where(s => s.IsActive)
-            .OrderBy(s => s.Code)
-            .ToListAsync(cancellationToken);
+            .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id
+                && !dbContext.SimpleMovingAverages.Any(sma => sma.KlineDataId == k.Id))
+            .OrderBy(k => k.OpenTime)
+            .Select(k => (DateTimeOffset?)k.OpenTime)
+            .FirstOrDefaultAsync(cancellationToken);
 
-        var intervals = await dbContext.Intervals
+        var fromRsi = await dbContext.KlineData
             .AsNoTracking()
-            .Where(i => i.IsActive)
-            .OrderBy(i => i.Duration)
-            .ToListAsync(cancellationToken);
+            .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id
+                && !dbContext.RelativeStrengthIndexes.Any(rsi => rsi.KlineDataId == k.Id))
+            .OrderBy(k => k.OpenTime)
+            .Select(k => (DateTimeOffset?)k.OpenTime)
+            .FirstOrDefaultAsync(cancellationToken);
 
-        var results = new List<IndicatorSyncResult>();
+        var fromMacd = await dbContext.KlineData
+            .AsNoTracking()
+            .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id
+                && !dbContext.Macd.Any(m => m.KlineDataId == k.Id))
+            .OrderBy(k => k.OpenTime)
+            .Select(k => (DateTimeOffset?)k.OpenTime)
+            .FirstOrDefaultAsync(cancellationToken);
 
-        foreach (var symbol in symbols)
-        {
-            foreach (var interval in intervals)
-            {
-                // Find the earliest candle missing any indicator row.
-                // Querying each indicator separately is more efficient than a multi-OR join,
-                // and ensures partial sync catches newly added indicator types automatically.
-                var fromSma = await dbContext.KlineData
-                    .AsNoTracking()
-                    .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id
-                        && !dbContext.SimpleMovingAverages.Any(sma => sma.KlineDataId == k.Id))
-                    .OrderBy(k => k.OpenTime)
-                    .Select(k => (DateTimeOffset?)k.OpenTime)
-                    .FirstOrDefaultAsync(cancellationToken);
+        var candidates = new[] { fromSma, fromRsi, fromMacd }
+            .Where(dt => dt.HasValue)
+            .Select(dt => dt!.Value)
+            .ToList();
 
-                var fromRsi = await dbContext.KlineData
-                    .AsNoTracking()
-                    .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id
-                        && !dbContext.RelativeStrengthIndexes.Any(rsi => rsi.KlineDataId == k.Id))
-                    .OrderBy(k => k.OpenTime)
-                    .Select(k => (DateTimeOffset?)k.OpenTime)
-                    .FirstOrDefaultAsync(cancellationToken);
+        var from = candidates.Count > 0 ? (DateTimeOffset?)candidates.Min() : null;
 
-                var fromMacd = await dbContext.KlineData
-                    .AsNoTracking()
-                    .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id
-                        && !dbContext.Macd.Any(m => m.KlineDataId == k.Id))
-                    .OrderBy(k => k.OpenTime)
-                    .Select(k => (DateTimeOffset?)k.OpenTime)
-                    .FirstOrDefaultAsync(cancellationToken);
+        if (from is null)
+            return new IndicatorSyncResult(symbol.Code, interval.Code, 0, 0, 0);
 
-                var candidates = new[] { fromSma, fromRsi, fromMacd }
-                    .Where(dt => dt.HasValue)
-                    .Select(dt => dt!.Value)
-                    .ToList();
+        var to = await dbContext.KlineData
+            .AsNoTracking()
+            .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id)
+            .MaxAsync(k => k.OpenTime, cancellationToken);
 
-                var from = candidates.Count > 0 ? (DateTimeOffset?)candidates.Min() : null;
-
-                if (from is null)
-                {
-                    results.Add(new IndicatorSyncResult(symbol.Code, interval.Code, 0, 0, 0));
-                    continue;
-                }
-
-                var to = await dbContext.KlineData
-                    .AsNoTracking()
-                    .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id)
-                    .MaxAsync(k => k.OpenTime, cancellationToken);
-
-                var result = await SyncRangeAsync(symbol, interval, from.Value, to, cancellationToken);
-                results.Add(result);
-            }
-        }
-
-        return results;
+        return await SyncRangeAsync(symbol, interval, from.Value, to, cancellationToken);
     }
 
     public async Task ComputeAndSaveAsync(

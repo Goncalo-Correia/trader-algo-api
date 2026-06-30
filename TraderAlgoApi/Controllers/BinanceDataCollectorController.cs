@@ -1,17 +1,21 @@
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using TraderAlgoApi.Data;
+using TraderAlgoApi.Dtos.Jobs;
 using TraderAlgoApi.Models.Enums;
 using TraderAlgoApi.Services.DataCollector;
+using TraderAlgoApi.Services.Jobs;
 
 namespace TraderAlgoApi.Controllers;
 
 [ApiController]
 [Route("api/binance/data-collector")]
 public sealed class BinanceDataCollectorController(
-    ApplicationDbContext dbContext,
-    IBinanceDataCollectorService dataCollectorService) : ControllerBase
+    IBinanceDataCollectorService dataCollectorService,
+    ISyncJobService syncJobService) : ControllerBase
 {
+    /// <summary>
+    /// Synchronous single symbol/interval collection. Targeted/diagnostic use — for a full backfill
+    /// of every symbol/interval use <see cref="FullSync"/>, which runs as a background job.
+    /// </summary>
     [HttpPost("{symbol}/{interval}")]
     public async Task<ActionResult<DataCollectionResult>> CollectKlines(
         string symbol,
@@ -24,60 +28,19 @@ public sealed class BinanceDataCollectorController(
     }
 
     [HttpPost("partial-sync")]
-    public async Task<ActionResult<IReadOnlyList<DataCollectionResult>>> PartialSync(CancellationToken cancellationToken)
+    public async Task<ActionResult<SyncJobResponse>> PartialSync(CancellationToken cancellationToken)
     {
-        var results = await CollectAllAsync(
-            (symbol, interval) => dataCollectorService.SyncGapsAsync(
-                symbol.Code, interval.Code, DataCollectorDefaults.DataStartDate, cancellationToken),
-            cancellationToken);
-
-        return Ok(results);
+        var job = await syncJobService.CreateAndQueueAsync(SyncJobType.DataCollectorPartialSync, cancellationToken);
+        return Accepted(job);
     }
 
     [HttpPost("full-sync")]
-    public async Task<ActionResult<IReadOnlyList<DataCollectionResult>>> FullSync(CancellationToken cancellationToken)
+    public async Task<ActionResult<SyncJobResponse>> FullSync(CancellationToken cancellationToken)
     {
-        var results = await CollectAllAsync(
-            (symbol, interval) => dataCollectorService.CollectKlinesAsync(
-                symbol.Code, interval.Code, DataCollectorDefaults.DataStartDate, cancellationToken),
-            cancellationToken);
-
-        return Ok(results);
+        var job = await syncJobService.CreateAndQueueAsync(SyncJobType.DataCollectorFullSync, cancellationToken);
+        return Accepted(job);
     }
 
-    private async Task<List<DataCollectionResult>> CollectAllAsync(
-        Func<Models.Symbol, Models.Interval, Task<DataCollectionResult>> collect,
-        CancellationToken cancellationToken)
-    {
-        var (symbols, intervals) = await LoadBinanceSymbolsAndIntervalsAsync(cancellationToken);
-        var results = new List<DataCollectionResult>(symbols.Count * intervals.Count);
-
-        foreach (var symbol in symbols)
-        {
-            foreach (var interval in intervals)
-            {
-                results.Add(await collect(symbol, interval));
-            }
-        }
-
-        return results;
-    }
-
-    private async Task<(List<Models.Symbol> Symbols, List<Models.Interval> Intervals)>
-        LoadBinanceSymbolsAndIntervalsAsync(CancellationToken cancellationToken)
-    {
-        var symbols = await dbContext.Symbols
-            .AsNoTracking()
-            .Where(s => s.IsActive && s.ProviderId == (int)SymbolProvider.Binance)
-            .OrderBy(s => s.Code)
-            .ToListAsync(cancellationToken);
-
-        var intervals = await dbContext.Intervals
-            .AsNoTracking()
-            .Where(i => i.IsActive)
-            .OrderBy(i => i.Duration)
-            .ToListAsync(cancellationToken);
-
-        return (symbols, intervals);
-    }
+    private ActionResult<SyncJobResponse> Accepted(Models.SyncJob job) =>
+        AcceptedAtAction(nameof(JobsController.Get), "Jobs", new { id = job.Id }, SyncJobResponse.From(job));
 }

@@ -19,6 +19,7 @@ to **Kronos** for AI candle forecasting and an **ML policy** sidecar for model-d
 - [Backtests](#backtests)
 - [ML policies & training](#ml-policies--training)
 - [Kronos forecasting](#kronos-forecasting)
+- [Background sync jobs](#background-sync-jobs)
 - [API reference](#api-reference)
 - [Logging](#logging)
 - [Running locally](#running-locally)
@@ -464,6 +465,40 @@ temperature, single sample). If the connector is down the endpoints return `503`
 
 ---
 
+## Background sync jobs
+
+Full backfills are long — a full data-collection sweep since 2020 across every symbol×interval can run
+for **days**. Running that inside an HTTP request fails on a hosted setup: the connection would have to
+stay open for the whole run, and the work is tied to the request's cancellation token, so any client
+disconnect aborts it. Instead these operations run as **background jobs**, decoupled from the request.
+
+The four bulk endpoints — data-collector `full-sync`/`partial-sync` and indicator
+`full-sync`/`partial-sync` — enqueue a job and return **`202 Accepted`** immediately with a `SyncJob`
+record (and a `Location` header to its status). Poll `GET /api/jobs/{id}` for progress.
+
+**Execution model.**
+
+- A single `SyncJobWorker` hosted service drains an in-process queue, so jobs run **one at a time**
+  and never overlap. The work runs on the application-lifetime token, not the request token.
+- Each job's status is a durable `sync_jobs` row (`Pending → Running → Completed/Failed/Cancelled`)
+  with `totalUnits`/`completedUnits` progress (counted in symbol×interval pairs) and a `message`.
+- Enqueuing a sync whose type is already `Pending`/`Running` returns the existing job — the same sync
+  can't be double-run.
+- Each pair is processed in its own DI scope so the EF change tracker doesn't accumulate across a
+  multi-day run, and a single failing pair is logged and skipped rather than aborting the whole job.
+- **Resumable:** on startup the worker re-queues any job left `Pending`/`Running` by a previous
+  process. Because both syncs are idempotent (collection skips existing candles; indicator sync
+  upserts), an interrupted job simply resumes after a restart or redeploy.
+
+> **Hosting note.** The worker lives inside the web service, so a multi-day job needs an instance that
+> does not idle-stop (i.e. a paid Render tier, not the free instance which spins down after ~15 min of
+> no traffic). It runs identically locally — hit the endpoint and poll `/api/jobs/{id}`.
+
+The single-pair `POST /binance/data-collector/{symbol}/{interval}` endpoint stays synchronous for
+targeted/diagnostic use; prefer `full-sync` for anything large.
+
+---
+
 ## API reference
 
 REST base path `/api`. Enums (side, status, strategy, etc.) serialize as strings.
@@ -479,7 +514,9 @@ REST base path `/api`. Enums (side, status, strategy, etc.) serialize as strings
 | **Rules** | `GET /rules/{sma\|rsi\|macd}/evaluate?symbol=&interval=` |
 | **Charts** | `GET /charts/candles?symbol=&interval=&lookback=` · `GET /charts/candles/indicators` · `GET /charts/candles/indicators/date-interval?from=&to=&symbol=&interval=` |
 | **Symbols / Intervals** | `GET /symbols` · `GET /intervals` |
-| **Data collector** | `POST /binance/data-collector/{symbol}/{interval}` · `POST /binance/data-collector/partial-sync` · `POST /binance/data-collector/full-sync` |
+| **Data collector** | `POST /binance/data-collector/{symbol}/{interval}` (sync, single pair) · `POST /binance/data-collector/partial-sync` · `POST /binance/data-collector/full-sync` (both **async** → `202` + job) |
+| **Indicators** | `POST /indicators/partial-sync` · `POST /indicators/full-sync` (both **async** → `202` + job) |
+| **Jobs** | `GET /jobs/{id}` (sync-job status) · `GET /jobs?take=` (recent jobs) |
 | **Kronos** | `GET /kronos/{model}/{mode}?symbol=&interval=` (candle forecasts) |
 | **Health** | `GET /health` (checks DB connectivity) |
 

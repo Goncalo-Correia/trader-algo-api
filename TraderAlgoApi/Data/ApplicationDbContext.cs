@@ -34,6 +34,10 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<MlTrainingRun> MlTrainingRuns => Set<MlTrainingRun>();
     public DbSet<MlTrainingRunStatus> MlTrainingRunStatuses => Set<MlTrainingRunStatus>();
 
+    public DbSet<SyncJob> SyncJobs => Set<SyncJob>();
+    public DbSet<SyncJobType> SyncJobTypes => Set<SyncJobType>();
+    public DbSet<SyncJobStatus> SyncJobStatuses => Set<SyncJobStatus>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -206,6 +210,40 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
             new MlTrainingRunStatus { Id = 2, Name = "Running"   },
             new MlTrainingRunStatus { Id = 3, Name = "Completed" },
             new MlTrainingRunStatus { Id = 4, Name = "Failed"    });
+
+        // -------------------------------------------------------------------
+        // SyncJob lookup tables — IDs match the C# enum values
+        // -------------------------------------------------------------------
+        modelBuilder.Entity<SyncJobType>().HasData(
+            new SyncJobType { Id = 1, Name = "DataCollectorFullSync"    },
+            new SyncJobType { Id = 2, Name = "DataCollectorPartialSync" },
+            new SyncJobType { Id = 3, Name = "IndicatorFullSync"        },
+            new SyncJobType { Id = 4, Name = "IndicatorPartialSync"     });
+
+        modelBuilder.Entity<SyncJobStatus>().HasData(
+            new SyncJobStatus { Id = 1, Name = "Pending"   },
+            new SyncJobStatus { Id = 2, Name = "Running"   },
+            new SyncJobStatus { Id = 3, Name = "Completed" },
+            new SyncJobStatus { Id = 4, Name = "Failed"    },
+            new SyncJobStatus { Id = 5, Name = "Cancelled" });
+
+        // -------------------------------------------------------------------
+        // SyncJobs — durable status records for background syncs
+        // -------------------------------------------------------------------
+        modelBuilder.Entity<SyncJob>(entity =>
+        {
+            entity.HasIndex(j => j.StatusId);
+
+            entity.HasOne(j => j.Type)
+                .WithMany()
+                .HasForeignKey(j => j.TypeId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne(j => j.Status)
+                .WithMany()
+                .HasForeignKey(j => j.StatusId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
 
         // -------------------------------------------------------------------
         // MlPolicies — training configuration (symbol/interval + hyperparameters)
