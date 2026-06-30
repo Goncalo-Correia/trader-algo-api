@@ -134,7 +134,7 @@ public class DataCollectorServiceBase(
     public async Task<DataCollectionResult> SyncGapsAsync(
         string symbolCode,
         string intervalCode,
-        DateTimeOffset fallbackStartTime,
+        DateTimeOffset windowStart,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolCode);
@@ -143,17 +143,23 @@ public class DataCollectorServiceBase(
         var symbol   = await dbContext.Symbols.SingleAsync(s => s.Code == symbolCode, cancellationToken);
         var interval = await dbContext.Intervals.SingleAsync(i => i.Code == intervalCode, cancellationToken);
 
+        // Only inspect candles from the window floor forward, so the nightly timer can use a
+        // short lookback instead of rescanning the entire history on every run.
         var openTimes = await dbContext.KlineData
             .AsNoTracking()
-            .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id)
+            .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id && k.OpenTime >= windowStart)
             .OrderBy(k => k.OpenTime)
             .Select(k => k.OpenTime)
             .ToListAsync(cancellationToken);
 
         if (openTimes.Count == 0)
-            return await CollectKlinesAsync(symbolCode, intervalCode, fallbackStartTime, cancellationToken);
+            return await CollectKlinesAsync(symbolCode, intervalCode, windowStart, cancellationToken);
 
         var gaps = new List<(DateTimeOffset Start, DateTimeOffset? End)>();
+
+        // Leading gap: candles missing between the window floor and the first row in range.
+        if (openTimes[0] > windowStart)
+            gaps.Add((windowStart, openTimes[0]));
 
         for (var i = 0; i < openTimes.Count - 1; i++)
         {

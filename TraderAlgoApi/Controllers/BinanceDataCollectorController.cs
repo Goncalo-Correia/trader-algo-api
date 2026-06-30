@@ -12,34 +12,24 @@ public sealed class BinanceDataCollectorController(
     ApplicationDbContext dbContext,
     IBinanceDataCollectorService dataCollectorService) : ControllerBase
 {
-    private static readonly DateTimeOffset DataStartDate = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
-
     [HttpPost("{symbol}/{interval}")]
     public async Task<ActionResult<DataCollectionResult>> CollectKlines(
         string symbol,
         string interval,
         CancellationToken cancellationToken)
     {
-        var result = await dataCollectorService.CollectKlinesAsync(symbol, interval, DataStartDate, cancellationToken);
+        var result = await dataCollectorService.CollectKlinesAsync(
+            symbol, interval, DataCollectorDefaults.DataStartDate, cancellationToken);
         return Ok(result);
     }
 
     [HttpPost("partial-sync")]
     public async Task<ActionResult<IReadOnlyList<DataCollectionResult>>> PartialSync(CancellationToken cancellationToken)
     {
-        var (symbols, intervals) = await LoadBinanceSymbolsAndIntervalsAsync(cancellationToken);
-        var results = new List<DataCollectionResult>();
-
-        foreach (var symbol in symbols)
-        {
-            foreach (var interval in intervals)
-            {
-                var result = await dataCollectorService.SyncGapsAsync(
-                    symbol.Code, interval.Code, DataStartDate, cancellationToken);
-
-                results.Add(result);
-            }
-        }
+        var results = await CollectAllAsync(
+            (symbol, interval) => dataCollectorService.SyncGapsAsync(
+                symbol.Code, interval.Code, DataCollectorDefaults.DataStartDate, cancellationToken),
+            cancellationToken);
 
         return Ok(results);
     }
@@ -47,21 +37,30 @@ public sealed class BinanceDataCollectorController(
     [HttpPost("full-sync")]
     public async Task<ActionResult<IReadOnlyList<DataCollectionResult>>> FullSync(CancellationToken cancellationToken)
     {
+        var results = await CollectAllAsync(
+            (symbol, interval) => dataCollectorService.CollectKlinesAsync(
+                symbol.Code, interval.Code, DataCollectorDefaults.DataStartDate, cancellationToken),
+            cancellationToken);
+
+        return Ok(results);
+    }
+
+    private async Task<List<DataCollectionResult>> CollectAllAsync(
+        Func<Models.Symbol, Models.Interval, Task<DataCollectionResult>> collect,
+        CancellationToken cancellationToken)
+    {
         var (symbols, intervals) = await LoadBinanceSymbolsAndIntervalsAsync(cancellationToken);
-        var results = new List<DataCollectionResult>();
+        var results = new List<DataCollectionResult>(symbols.Count * intervals.Count);
 
         foreach (var symbol in symbols)
         {
             foreach (var interval in intervals)
             {
-                var result = await dataCollectorService.CollectKlinesAsync(
-                    symbol.Code, interval.Code, DataStartDate, cancellationToken);
-
-                results.Add(result);
+                results.Add(await collect(symbol, interval));
             }
         }
 
-        return Ok(results);
+        return results;
     }
 
     private async Task<(List<Models.Symbol> Symbols, List<Models.Interval> Intervals)>

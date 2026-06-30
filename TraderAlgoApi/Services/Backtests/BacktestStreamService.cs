@@ -1,5 +1,6 @@
 using System.Net.WebSockets;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Data;
 using TraderAlgoApi.Dtos.Backtests;
@@ -27,7 +28,13 @@ public sealed class BacktestStreamService(
     TimeProvider timeProvider,
     ILogger<BacktestStreamService> logger) : IBacktestStreamService
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        // Serialize enums (e.g. Trade.Side) as strings so streamed trade events match the
+        // client's "Buy"/"Sell" guard and the REST contract; without this the client silently
+        // drops every trade frame and markers only appear after the run via REST reconciliation.
+        Converters = { new JsonStringEnumConverter() }
+    };
     private static readonly TimeSpan CandleInterval = TimeSpan.FromMilliseconds(100);
 
     // How often to flush incremental backtest progress (candle count / balance) to the DB.

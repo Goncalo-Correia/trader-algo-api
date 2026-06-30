@@ -8,8 +8,6 @@ public sealed class DataCollectorTimer(
     TimeProvider timeProvider,
     ILogger<DataCollectorTimer> logger) : BackgroundService
 {
-    private static readonly DateTimeOffset DataStartDate = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
-
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -44,6 +42,8 @@ public sealed class DataCollectorTimer(
             .OrderBy(i => i.Duration)
             .ToListAsync(cancellationToken);
 
+        var windowStart = timeProvider.GetUtcNow() - DataCollectorDefaults.TimerLookback;
+
         foreach (var symbol in symbols)
         {
             foreach (var interval in intervals)
@@ -53,7 +53,7 @@ public sealed class DataCollectorTimer(
                     var result = await binanceService.SyncGapsAsync(
                         symbol.Code,
                         interval.Code,
-                        DataStartDate,
+                        windowStart,
                         cancellationToken);
 
                     logger.LogInformation(
