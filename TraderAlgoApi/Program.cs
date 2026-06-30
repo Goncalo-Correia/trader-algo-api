@@ -145,12 +145,14 @@ app.UseExceptionHandler();
 
 app.UseWebSockets();
 
-if (app.Environment.IsDevelopment())
+// Swagger is exposed in every environment by default; set Swagger:Enabled=false to turn it off.
+if (builder.Configuration.GetValue("Swagger:Enabled", true))
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
-else
+
+if (!app.Environment.IsDevelopment())
 {
     app.UseWhen(
         context => !context.WebSockets.IsWebSocketRequest,

@@ -20,6 +20,7 @@ to **Kronos** for AI candle forecasting and an **ML policy** sidecar for model-d
 - [ML policies & training](#ml-policies--training)
 - [Kronos forecasting](#kronos-forecasting)
 - [API reference](#api-reference)
+- [Logging](#logging)
 - [Running locally](#running-locally)
 
 ---
@@ -497,6 +498,28 @@ Errors return RFC 7807 ProblemDetails: `400` invalid input, `404` not found, `40
 
 ---
 
+## Logging
+
+Logging is config-driven (standard ASP.NET Core `ILogger`), so verbosity is controlled entirely
+through configuration — no code changes or redeploys. The defaults live in the `Logging:LogLevel`
+section of `appsettings.json`; override them per environment with environment variables using `__`
+as the nesting separator. On a restart, the new levels take effect immediately.
+
+Levels, most to least verbose: `Trace` → `Debug` → `Information` → `Warning` → `Error` → `Critical`
+→ `None`. Categories are the class's namespace + name (the `T` in `ILogger<T>`); the most specific
+match wins.
+
+| Goal | Environment variable |
+|---|---|
+| Quiet everything to warnings and errors | `Logging__LogLevel__Default=Warning` |
+| Silence just the data collector (its nightly/full syncs are the noisiest) | `Logging__LogLevel__TraderAlgoApi.Services.DataCollector=None` |
+| Silence all app logs but keep framework warnings | `Logging__LogLevel__TraderAlgoApi=Warning` |
+
+> **Swagger** is exposed in every environment by default and served at `/swagger`. Set
+> `Swagger__Enabled=false` (config key `Swagger:Enabled`) to turn it off without a redeploy.
+
+---
+
 ## Running locally
 
 Requires the **.NET 10 SDK** and a PostgreSQL database (Supabase or local).
@@ -523,7 +546,8 @@ Requires the **.NET 10 SDK** and a PostgreSQL database (Supabase or local).
    dotnet run
    ```
 
-3. Open Swagger at `https://localhost:7096/swagger` (Development only).
+3. Open Swagger at `https://localhost:7096/swagger` (enabled by default in every environment; see
+   [Logging](#logging) to disable it).
 
 Optional sidecars (base URLs configurable under `Kronos:` and `MlPolicy:`): the Kronos forecast
 service and the ML policy service. The API runs without them — only the related endpoints/strategy
