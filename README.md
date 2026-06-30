@@ -22,6 +22,7 @@ to **Kronos** for AI candle forecasting and an **ML policy** sidecar for model-d
 - [Background sync jobs](#background-sync-jobs)
 - [API reference](#api-reference)
 - [Logging](#logging)
+- [Authentication](#authentication)
 - [Running locally](#running-locally)
 
 ---
@@ -501,7 +502,8 @@ targeted/diagnostic use; prefer `full-sync` for anything large.
 
 ## API reference
 
-REST base path `/api`. Enums (side, status, strategy, etc.) serialize as strings.
+REST base path `/api`. Enums (side, status, strategy, etc.) serialize as strings. **All endpoints
+require the API key** (`/health` is the only exception) — see [Authentication](#authentication).
 
 | Area | Endpoints |
 |---|---|
@@ -518,7 +520,7 @@ REST base path `/api`. Enums (side, status, strategy, etc.) serialize as strings
 | **Indicators** | `POST /indicators/partial-sync` · `POST /indicators/full-sync` (both **async** → `202` + job) |
 | **Jobs** | `GET /jobs/{id}` (sync-job status) · `GET /jobs?take=` (recent jobs) |
 | **Kronos** | `GET /kronos/{model}/{mode}?symbol=&interval=` (candle forecasts) |
-| **Health** | `GET /health` (checks DB connectivity) |
+| **Health** | `GET /health` (checks DB connectivity; **public — no key required**) |
 
 **WebSocket endpoints**
 
@@ -530,8 +532,8 @@ REST base path `/api`. Enums (side, status, strategy, etc.) serialize as strings
 | `WS /ws/ml/training?trainingRunId=&delay=` | ML training decision replay |
 | `WS /ws/tradebots/events?tradingAccountId=` | Live trade events |
 
-Errors return RFC 7807 ProblemDetails: `400` invalid input, `404` not found, `409` conflict,
-`503` upstream (Kronos/ML) unavailable.
+Errors return RFC 7807 ProblemDetails: `400` invalid input, `401` missing/invalid API key,
+`404` not found, `409` conflict, `503` upstream (Kronos/ML) unavailable.
 
 ---
 
