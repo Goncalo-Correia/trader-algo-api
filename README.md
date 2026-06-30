@@ -23,6 +23,7 @@ to **Kronos** for AI candle forecasting and an **ML policy** sidecar for model-d
 - [API reference](#api-reference)
 - [Logging](#logging)
 - [Authentication](#authentication)
+- [Environment variables](#environment-variables)
 - [Running locally](#running-locally)
 
 ---
@@ -599,6 +600,36 @@ the `X-Api-Key` header.
 > CORS policy in `Program.cs` (`WithOrigins(...)`) — *not* to `AllowedHosts`. `AllowedHosts` filters
 > the inbound `Host` header and should list the **API's** own hostname
 > (`trader-algo-api.onrender.com`); CORS controls which **browser origins** may call it.
+
+---
+
+## Environment variables
+
+Configuration is layered: `appsettings.json` holds the defaults, and any value can be overridden by
+an environment variable. Nested keys use a **double underscore** (`__`) — e.g. the env var
+`ConnectionStrings__Supabase` maps to the config key `ConnectionStrings:Supabase`. Secrets are never
+committed; locally they live in user-secrets, in production they're set as environment variables
+(e.g. on Render).
+
+| Variable | Required | Default | Description & options |
+|---|---|---|---|
+| `ApiKey` | **Yes** | — | API key required on every endpoint (`X-Api-Key` header / `?apiKey=` for WebSockets / Basic-auth password for Swagger). The app fails to start if it's missing. Use a long random string. See [Authentication](#authentication). |
+| `ConnectionStrings__Supabase` | **Yes** | — | Npgsql connection string for the main PostgreSQL database. Form: `Host=…;Port=5432;Database=postgres;Username=…;Password=…;SSL Mode=…`. **`SSL Mode`** options: `Disable`, `Allow`, `Prefer`, `Require` (encrypt, no cert validation — the default to use with Supabase), `VerifyCA`, `VerifyFull` (validate chain + hostname; needs Supabase's root CA via `Root Certificate=<path>`, since their pooler cert isn't in the public trust store). |
+| `ASPNETCORE_ENVIRONMENT` | Recommended | `Production` | .NET hosting environment. `Production` enables HTTPS redirection (non-WebSocket requests) and skips dev-only connection-pool clearing; `Development` does the opposite and is more verbose. Defaults to `Production` when unset. |
+| `Mlflow__TrackingUri` | For MLflow | falls back to `ConnectionStrings__Supabase` | Connection to the MLflow tracking database. Accepts a libpq URI (`postgresql://user:pass@host:5432/postgres?sslmode=require`) or an Npgsql keyword string. If unset, MLflow queries run against the main Supabase connection instead of the tracking schema. |
+| `Mlflow__Enabled` | No | `true` | Enables the MLflow tracking features. Set `false` to disable. |
+| `Swagger__Enabled` | No | `true` | Serves the (key-gated) Swagger UI and document at `/swagger`. Set `false` to remove it entirely in production. |
+| `Logging__LogLevel__Default` | No | `Information` | Global log level. Options: `Trace`, `Debug`, `Information`, `Warning`, `Error`, `Critical`, `None`. |
+| `Logging__LogLevel__<Category>` | No | varies | Per-namespace override, e.g. `Logging__LogLevel__Microsoft.AspNetCore=Warning` or `Logging__LogLevel__TraderAlgoApi.Services.Trades=Debug`. See [Logging](#logging). |
+| `Binance__BaseUrl` | No | `https://api.binance.com` | Binance REST base URL (public market data — no key needed). |
+| `Binance__WebSocketBaseUrl` | No | `wss://stream.binance.com:443` | Binance WebSocket stream base URL. |
+| `Kronos__BaseUrl` | No | `http://host.docker.internal:8000` | Base URL of the optional Kronos forecast sidecar. The default only resolves when a sidecar runs on the same host; on Render leave it unset (Kronos endpoints stay inactive) or point it at a reachable URL. |
+| `MlPolicy__BaseUrl` | No | `http://host.docker.internal:8766` | Base URL of the optional ML policy sidecar. Same caveat as `Kronos__BaseUrl`. |
+| `ASPNETCORE_FORWARDEDHEADERS_ENABLED` | No | unset | Set to `true` behind a TLS-terminating proxy (like Render) so the app trusts `X-Forwarded-Proto`/`X-Forwarded-For`. Enable it if HTTPS redirection causes redirect loops. |
+
+**Don't set on Render:** `Kestrel__Certificates__Development__Password` (local HTTPS dev cert only) or
+a port/`ASPNETCORE_URLS` variable — the Dockerfile already binds Kestrel to `:10000`, which Render
+expects.
 
 ---
 
