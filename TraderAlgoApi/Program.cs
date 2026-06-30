@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.OpenApi;
 using Npgsql;
 using TraderAlgoApi.Data;
 using TraderAlgoApi.Infrastructure;
@@ -32,7 +33,21 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
         options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    // Surface an "Authorize" button in the UI so the "Try it out" calls send the X-Api-Key header.
+    options.AddSecurityDefinition("ApiKey", new OpenApiSecurityScheme
+    {
+        Name = "X-Api-Key",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.ApiKey,
+        Description = "API key required to call the endpoints."
+    });
+    options.AddSecurityRequirement(document => new OpenApiSecurityRequirement
+    {
+        [new OpenApiSecuritySchemeReference("ApiKey", document, null)] = new List<string>()
+    });
+});
 
 // Centralized RFC 7807 error responses for everything not explicitly handled in a controller.
 builder.Services.AddProblemDetails();
@@ -153,8 +168,11 @@ app.UseExceptionHandler();
 app.UseWebSockets();
 
 // Swagger is exposed in every environment by default; set Swagger:Enabled=false to turn it off.
+// It maps your whole API surface, so gate it behind the API key (presented as the Basic-auth
+// password, since a browser can't attach a custom header when navigating to /swagger).
 if (builder.Configuration.GetValue("Swagger:Enabled", true))
 {
+    app.UseSwaggerApiKeyGate();
     app.UseSwagger();
     app.UseSwaggerUI();
 }
@@ -167,6 +185,11 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseCors(LocalDevelopmentCorsPolicy);
+
+// Require the API key on all endpoints (REST via X-Api-Key, WebSockets via ?apiKey=). Placed
+// after CORS so the policy's headers are applied to 401 responses and preflight is handled first.
+app.UseApiKeyAuthentication();
+
 app.UseAuthorization();
 app.MapWebSocketEndpoints();
 app.MapControllers();

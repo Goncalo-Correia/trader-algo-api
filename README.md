@@ -573,8 +573,30 @@ Logging__LogLevel__TraderAlgoApi.Services.DataCollector=None  # silence the data
 Logging__LogLevel__TraderAlgoApi.Services.Trades=Debug      # trace SL/TP/limit fills
 ```
 
-> **Swagger** is exposed in every environment by default and served at `/swagger`. Set
-> `Swagger__Enabled=false` (config key `Swagger:Enabled`) to turn it off without a redeploy.
+> **Swagger** is exposed in every environment by default and served at `/swagger`, but it is gated
+> behind the API key (see [Authentication](#authentication)). Set `Swagger__Enabled=false` (config
+> key `Swagger:Enabled`) to turn it off entirely without a redeploy.
+
+---
+
+## Authentication
+
+Every endpoint requires the `ApiKey` (the health check at `/health` is the only exception, so
+Render can probe it). How the key is presented depends on the caller:
+
+| Caller | How to send the key |
+|---|---|
+| REST endpoints | `X-Api-Key: <key>` request header |
+| WebSocket streams (`/ws/...`) | `?apiKey=<key>` query parameter (browsers can't set headers on a WS handshake) |
+| Swagger UI / document (`/swagger`) | HTTP Basic auth — any username, the key as the **password** (the browser prompts on navigation) |
+
+Inside the Swagger UI, click **Authorize** and paste the key to make the "Try it out" calls send
+the `X-Api-Key` header.
+
+> **CORS vs. host filtering.** When the frontend is deployed (e.g. to Vercel), add its origin to the
+> CORS policy in `Program.cs` (`WithOrigins(...)`) — *not* to `AllowedHosts`. `AllowedHosts` filters
+> the inbound `Host` header and should list the **API's** own hostname
+> (`trader-algo-api.onrender.com`); CORS controls which **browser origins** may call it.
 
 ---
 
@@ -587,9 +609,21 @@ Requires the **.NET 10 SDK** and a PostgreSQL database (Supabase or local).
 
    ```bash
    cd TraderAlgoApi
-   dotnet user-secrets set "ConnectionStrings:Supabase" "Host=...;Database=postgres;Username=...;Password=...;SSL Mode=Require;Trust Server Certificate=true"
+   dotnet user-secrets set "ConnectionStrings:Supabase" "Host=...;Database=postgres;Username=...;Password=...;SSL Mode=VerifyFull;Root Certificate=/path/to/supabase-ca.crt"
    dotnet user-secrets set "Mlflow:TrackingUri" "postgresql://USER:PASSWORD@HOST:5432/postgres?sslmode=require"
+   dotnet user-secrets set "ApiKey" "<a-long-random-string>"
    ```
+
+   `ApiKey` is **required** — the app fails to start without it. In production set it as the
+   `ApiKey` environment variable (e.g. on Render). See [Authentication](#authentication) for how
+   callers present it.
+
+   > **TLS to the database.** `SSL Mode=VerifyFull` validates the server certificate and hostname,
+   > which needs Supabase's root CA — download it from the Supabase dashboard
+   > (*Project Settings → Database → SSL configuration*) and point `Root Certificate` at the file.
+   > If providing the CA is impractical in your host, `SSL Mode=Require` (encrypt without validation)
+   > is the weaker fallback — but never `Trust Server Certificate=true`, which accepts any cert and
+   > defeats the purpose.
 
    If the API runs in Docker, pass the MLflow tracking database through the container environment:
 
@@ -604,8 +638,9 @@ Requires the **.NET 10 SDK** and a PostgreSQL database (Supabase or local).
    dotnet run
    ```
 
-3. Open Swagger at `https://localhost:7096/swagger` (enabled by default in every environment; see
-   [Logging](#logging) to disable it).
+3. Open Swagger at `https://localhost:7096/swagger`. The browser prompts for credentials — enter any
+   username and your `ApiKey` as the password (see [Authentication](#authentication)). Enabled by
+   default in every environment; see [Logging](#logging) to disable it.
 
 Optional sidecars (base URLs configurable under `Kronos:` and `MlPolicy:`): the Kronos forecast
 service and the ML policy service. The API runs without them — only the related endpoints/strategy
