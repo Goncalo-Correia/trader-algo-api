@@ -9,10 +9,14 @@ namespace TraderAlgoApi.Controllers;
 public sealed class JobsController(ISyncJobService syncJobService) : ControllerBase
 {
     [HttpGet("{id:long}")]
-    public async Task<ActionResult<SyncJobResponse>> Get(long id, CancellationToken cancellationToken)
+    public async Task<ActionResult<SyncJobDetailResponse>> Get(long id, CancellationToken cancellationToken)
     {
         var job = await syncJobService.GetAsync(id, cancellationToken);
-        return job is null ? NotFound() : Ok(SyncJobResponse.From(job));
+        if (job is null)
+            return NotFound();
+
+        var errors = await syncJobService.GetErrorsAsync(id, cancellationToken);
+        return Ok(SyncJobDetailResponse.From(job, errors));
     }
 
     [HttpGet]

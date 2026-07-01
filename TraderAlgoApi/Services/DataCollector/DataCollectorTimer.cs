@@ -57,8 +57,13 @@ public sealed class DataCollectorTimer(
                         cancellationToken);
 
                     logger.LogInformation(
-                        "Synced {Symbol}/{Interval}: {Inserted} inserted, {Skipped} skipped",
-                        result.Symbol, result.Interval, result.InsertedCount, result.SkippedCount);
+                        "Synced {Symbol}/{Interval}: {Inserted} inserted, {Skipped} skipped, {Errors} error(s)",
+                        result.Symbol, result.Interval, result.InsertedCount, result.SkippedCount, result.Errors.Count);
+
+                    foreach (var error in result.Errors)
+                        logger.LogWarning(
+                            "Data collection error for {Symbol}/{Interval} candle {CandleOpenTime}: {Message}",
+                            error.Symbol, error.Interval, error.CandleOpenTime, error.Message);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {

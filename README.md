@@ -488,6 +488,12 @@ record (and a `Location` header to its status). Poll `GET /api/jobs/{id}` for pr
   can't be double-run.
 - Each pair is processed in its own DI scope so the EF change tracker doesn't accumulate across a
   multi-day run, and a single failing pair is logged and skipped rather than aborting the whole job.
+- **Per-candle errors are recorded.** Data collection captures failures at the candle level instead
+  of throwing: a bad candle (or a failed batch persist) is skipped and logged, and the collector
+  returns the errors on its result. For job-driven syncs the executor persists each one as a
+  `sync_job_errors` row linked to the job (`syncJobId` FK, plus the `symbol`, `interval` and
+  `candleOpenTime` it refers to). `GET /api/jobs/{id}` returns the job together with these linked
+  errors, so a run's failures can be inspected afterwards.
 - **Resumable:** on startup the worker re-queues any job left `Pending`/`Running` by a previous
   process. Because both syncs are idempotent (collection skips existing candles; indicator sync
   upserts), an interrupted job simply resumes after a restart or redeploy.
@@ -519,7 +525,7 @@ require the API key** (`/health` is the only exception) — see [Authentication]
 | **Symbols / Intervals** | `GET /symbols` · `GET /intervals` |
 | **Data collector** | `POST /binance/data-collector/{symbol}/{interval}` (sync, single pair) · `POST /binance/data-collector/partial-sync` · `POST /binance/data-collector/full-sync` (both **async** → `202` + job) |
 | **Indicators** | `POST /indicators/partial-sync` · `POST /indicators/full-sync` (both **async** → `202` + job) |
-| **Jobs** | `GET /jobs/{id}` (sync-job status) · `GET /jobs?take=` (recent jobs) |
+| **Jobs** | `GET /jobs/{id}` (sync-job status + linked collection errors) · `GET /jobs?take=` (recent jobs) |
 | **Kronos** | `GET /kronos/{model}/{mode}?symbol=&interval=` (candle forecasts) |
 | **Health** | `GET /health` (checks DB connectivity; **public — no key required**) |
 

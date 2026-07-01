@@ -51,7 +51,22 @@ public sealed class SyncJobExecutor(
 
                     try
                     {
-                        await RunPairAsync(job.TypeEnum, symbol, interval, cancellationToken);
+                        var pairErrors = await RunPairAsync(job.TypeEnum, symbol, interval, cancellationToken);
+                        foreach (var error in pairErrors)
+                        {
+                            errorCount++;
+                            statusDb.SyncJobErrors.Add(new SyncJobError
+                            {
+                                SyncJobId      = job.Id,
+                                Symbol         = error.Symbol,
+                                Interval       = error.Interval,
+                                CandleOpenTime = error.CandleOpenTime,
+                                Message        = error.Message,
+                            });
+                            logger.LogWarning(
+                                "Sync job {JobId}: {Symbol}/{Interval} candle {CandleOpenTime}: {Message}",
+                                job.Id, error.Symbol, error.Interval, error.CandleOpenTime, error.Message);
+                        }
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
@@ -123,7 +138,7 @@ public sealed class SyncJobExecutor(
         return (symbols, intervals);
     }
 
-    private async Task RunPairAsync(
+    private async Task<IReadOnlyList<DataCollectionError>> RunPairAsync(
         Models.Enums.SyncJobType type,
         Symbol symbol,
         Interval interval,
@@ -135,24 +150,24 @@ public sealed class SyncJobExecutor(
         switch (type)
         {
             case Models.Enums.SyncJobType.DataCollectorFullSync:
-                await services.GetRequiredService<IBinanceDataCollectorService>()
-                    .CollectKlinesAsync(symbol.Code, interval.Code, DataCollectorDefaults.DataStartDate, cancellationToken);
-                break;
+                return (await services.GetRequiredService<IBinanceDataCollectorService>()
+                    .CollectKlinesAsync(symbol.Code, interval.Code, DataCollectorDefaults.DataStartDate, cancellationToken))
+                    .Errors;
 
             case Models.Enums.SyncJobType.DataCollectorPartialSync:
-                await services.GetRequiredService<IBinanceDataCollectorService>()
-                    .SyncGapsAsync(symbol.Code, interval.Code, DataCollectorDefaults.DataStartDate, cancellationToken);
-                break;
+                return (await services.GetRequiredService<IBinanceDataCollectorService>()
+                    .SyncGapsAsync(symbol.Code, interval.Code, DataCollectorDefaults.DataStartDate, cancellationToken))
+                    .Errors;
 
             case Models.Enums.SyncJobType.IndicatorFullSync:
                 await services.GetRequiredService<IIndicatorSyncService>()
                     .FullSyncPairAsync(symbol, interval, cancellationToken);
-                break;
+                return [];
 
             case Models.Enums.SyncJobType.IndicatorPartialSync:
                 await services.GetRequiredService<IIndicatorSyncService>()
                     .PartialSyncPairAsync(symbol, interval, cancellationToken);
-                break;
+                return [];
 
             default:
                 throw new ArgumentOutOfRangeException(nameof(type), type, "Unknown sync job type");

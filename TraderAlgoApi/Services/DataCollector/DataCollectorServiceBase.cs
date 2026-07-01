@@ -23,6 +23,10 @@ public class DataCollectorServiceBase(
         var symbol   = await dbContext.Symbols.SingleAsync(s => s.Code == symbolCode, cancellationToken);
         var interval = await dbContext.Intervals.SingleAsync(i => i.Code == intervalCode, cancellationToken);
 
+        var errors = new List<DataCollectionError>();
+        void AddError(DateTimeOffset? candleOpenTime, string message) =>
+            errors.Add(new DataCollectionError(symbol.Code, interval.Code, candleOpenTime, message));
+
         var fetchedCount  = 0;
         var insertedCount = 0;
         var updatedCount  = 0;
@@ -62,54 +66,71 @@ public class DataCollectorServiceBase(
 
             var existingByOpenTime = existingKlines.ToDictionary(k => k.OpenTime);
 
-            var newKlines = eligible
-                .Where(c => !existingByOpenTime.ContainsKey(c.OpenTime))
-                .Select(c => ToKlineData(c, symbol.Id, interval.Id))
-                .ToArray();
-
+            // Build inserts/updates one candle at a time so a single bad candle is recorded and
+            // skipped instead of aborting the batch.
+            var newKlines        = new List<KlineData>();
             var changedOpenTimes = new List<DateTimeOffset>();
-            var changedCount     = 0;
+            var erroredCount     = 0;
 
             foreach (var candle in eligible)
             {
-                if (!existingByOpenTime.TryGetValue(candle.OpenTime, out var existing))
-                    continue;
-
-                if (ApplyChanges(existing, candle))
+                try
                 {
-                    changedOpenTimes.Add(existing.OpenTime);
-                    changedCount++;
+                    if (existingByOpenTime.TryGetValue(candle.OpenTime, out var existing))
+                    {
+                        if (ApplyChanges(existing, candle))
+                            changedOpenTimes.Add(existing.OpenTime);
+                    }
+                    else
+                    {
+                        newKlines.Add(ToKlineData(candle, symbol.Id, interval.Id));
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    erroredCount++;
+                    AddError(candle.OpenTime, ex.Message);
                 }
             }
 
-            skippedCount += eligible.Length - newKlines.Length - changedCount;
+            var changedCount = changedOpenTimes.Count;
+            skippedCount += eligible.Length - newKlines.Count - changedCount - erroredCount;
 
-            if (newKlines.Length > 0)
+            if (newKlines.Count > 0 || changedCount > 0)
             {
-                dbContext.KlineData.AddRange(newKlines);
-                insertedCount += newKlines.Length;
-            }
-
-            if (newKlines.Length > 0 || changedCount > 0)
-            {
-                await dbContext.SaveChangesAsync(cancellationToken);
-                updatedCount += changedCount;
-
-                var allAffectedTimes = newKlines.Select(k => k.OpenTime).Concat(changedOpenTimes).ToList();
-                var indicatorFrom    = allAffectedTimes.Min();
-                var indicatorTo      = allAffectedTimes.Max();
-
-                if (changedOpenTimes.Count > 0)
+                try
                 {
-                    var latestInDb = await dbContext.KlineData
-                        .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id)
-                        .MaxAsync(k => k.OpenTime, cancellationToken);
-                    if (latestInDb > indicatorTo)
-                        indicatorTo = latestInDb;
-                }
+                    if (newKlines.Count > 0)
+                        dbContext.KlineData.AddRange(newKlines);
 
-                await indicatorSyncService.ComputeAndSaveAsync(
-                    symbol.Id, interval.Id, indicatorFrom, indicatorTo, cancellationToken);
+                    await dbContext.SaveChangesAsync(cancellationToken);
+                    insertedCount += newKlines.Count;
+                    updatedCount  += changedCount;
+
+                    var allAffectedTimes = newKlines.Select(k => k.OpenTime).Concat(changedOpenTimes).ToList();
+                    var indicatorFrom    = allAffectedTimes.Min();
+                    var indicatorTo      = allAffectedTimes.Max();
+
+                    if (changedOpenTimes.Count > 0)
+                    {
+                        var latestInDb = await dbContext.KlineData
+                            .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id)
+                            .MaxAsync(k => k.OpenTime, cancellationToken);
+                        if (latestInDb > indicatorTo)
+                            indicatorTo = latestInDb;
+                    }
+
+                    await indicatorSyncService.ComputeAndSaveAsync(
+                        symbol.Id, interval.Id, indicatorFrom, indicatorTo, cancellationToken);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // The persist covers the whole batch, so attribute the failure to every candle
+                    // it touched, then stop paging this pair — the tracked context is now suspect.
+                    foreach (var openTime in newKlines.Select(k => k.OpenTime).Concat(changedOpenTimes))
+                        AddError(openTime, ex.Message);
+                    break;
+                }
             }
 
             var nextCursor = eligible[^1].OpenTime.Add(interval.Duration);
@@ -128,7 +149,8 @@ public class DataCollectorServiceBase(
             fetchedCount,
             insertedCount,
             updatedCount,
-            skippedCount);
+            skippedCount,
+            errors);
     }
 
     public async Task<DataCollectionResult> SyncGapsAsync(
@@ -142,6 +164,10 @@ public class DataCollectorServiceBase(
 
         var symbol   = await dbContext.Symbols.SingleAsync(s => s.Code == symbolCode, cancellationToken);
         var interval = await dbContext.Intervals.SingleAsync(i => i.Code == intervalCode, cancellationToken);
+
+        var errors = new List<DataCollectionError>();
+        void AddError(DateTimeOffset? candleOpenTime, string message) =>
+            errors.Add(new DataCollectionError(symbol.Code, interval.Code, candleOpenTime, message));
 
         // Only inspect candles from the window floor forward, so the nightly timer can use a
         // short lookback instead of rescanning the entire history on every run.
@@ -178,7 +204,8 @@ public class DataCollectorServiceBase(
                 symbol.Code, interval.Code,
                 openTimes[0], openTimes[^1].Add(interval.Duration),
                 openTimes[^1],
-                FetchedCount: 0, InsertedCount: 0, UpdatedCount: 0, SkippedCount: 0);
+                FetchedCount: 0, InsertedCount: 0, UpdatedCount: 0, SkippedCount: 0,
+                Errors: errors);
         }
 
         var fetchedCount         = 0;
@@ -215,17 +242,38 @@ public class DataCollectorServiceBase(
                     .Select(k => k.OpenTime)
                     .ToHashSetAsync(cancellationToken);
 
-                var toInsert = eligible
-                    .Where(c => !existingTimes.Contains(c.OpenTime))
-                    .Select(c => ToKlineData(c, symbol.Id, interval.Id))
-                    .ToArray();
-
-                if (toInsert.Length > 0)
+                // Convert one candle at a time so a single malformed candle is recorded and
+                // skipped rather than aborting the whole gap backfill.
+                var toInsert = new List<KlineData>();
+                foreach (var candle in eligible.Where(c => !existingTimes.Contains(c.OpenTime)))
                 {
-                    dbContext.KlineData.AddRange(toInsert);
-                    await dbContext.SaveChangesAsync(cancellationToken);
-                    insertedCount      += toInsert.Length;
-                    firstInsertedInGap ??= toInsert[0].OpenTime;
+                    try
+                    {
+                        toInsert.Add(ToKlineData(candle, symbol.Id, interval.Id));
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        AddError(candle.OpenTime, ex.Message);
+                    }
+                }
+
+                if (toInsert.Count > 0)
+                {
+                    try
+                    {
+                        dbContext.KlineData.AddRange(toInsert);
+                        await dbContext.SaveChangesAsync(cancellationToken);
+                        insertedCount      += toInsert.Count;
+                        firstInsertedInGap ??= toInsert[0].OpenTime;
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        // The persist covers the whole batch, so attribute the failure to every
+                        // candle it touched, then stop backfilling this gap.
+                        foreach (var kline in toInsert)
+                            AddError(kline.OpenTime, ex.Message);
+                        break;
+                    }
                 }
 
                 if (eligible[^1].OpenTime > latestCandleOpenTime)
@@ -260,7 +308,8 @@ public class DataCollectorServiceBase(
             symbol.Code, interval.Code,
             openTimes[0], latestCandleOpenTime!.Value.Add(interval.Duration),
             latestCandleOpenTime,
-            fetchedCount, insertedCount, UpdatedCount: 0, SkippedCount: 0);
+            fetchedCount, insertedCount, UpdatedCount: 0, SkippedCount: 0,
+            Errors: errors);
     }
 
     private static KlineData ToKlineData(Candle candle, int symbolId, int intervalId) =>

@@ -50,4 +50,11 @@ public sealed class SyncJobService(
             .OrderByDescending(j => j.Id)
             .Take(take)
             .ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<SyncJobError>> GetErrorsAsync(long jobId, CancellationToken cancellationToken = default) =>
+        await dbContext.SyncJobErrors
+            .AsNoTracking()
+            .Where(e => e.SyncJobId == jobId)
+            .OrderBy(e => e.Id)
+            .ToListAsync(cancellationToken);
 }

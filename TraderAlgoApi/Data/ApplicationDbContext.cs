@@ -38,6 +38,8 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<SyncJobType> SyncJobTypes => Set<SyncJobType>();
     public DbSet<SyncJobStatus> SyncJobStatuses => Set<SyncJobStatus>();
 
+    public DbSet<SyncJobError> SyncJobErrors => Set<SyncJobError>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -393,6 +395,20 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
                 .WithMany(b => b.Trades)
                 .HasForeignKey(t => t.BacktestId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // -------------------------------------------------------------------
+        // SyncJobErrors — per-candle collection failures, scoped to the owning sync job
+        // -------------------------------------------------------------------
+        modelBuilder.Entity<SyncJobError>(entity =>
+        {
+            entity.HasIndex(e => e.SyncJobId);
+            entity.HasIndex(e => new { e.Symbol, e.Interval, e.CandleOpenTime });
+
+            entity.HasOne(e => e.SyncJob)
+                .WithMany()
+                .HasForeignKey(e => e.SyncJobId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<SimpleMovingAverage>(entity =>

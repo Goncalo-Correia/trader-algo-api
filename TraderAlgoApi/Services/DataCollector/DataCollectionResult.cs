@@ -9,4 +9,9 @@ public sealed record DataCollectionResult(
     int FetchedCount,
     int InsertedCount,
     int UpdatedCount,
-    int SkippedCount);
+    int SkippedCount,
+    IReadOnlyList<DataCollectionError> Errors)
+{
+    /// <summary>Convenience flag for callers that only need to know whether anything failed.</summary>
+    public bool HasErrors => Errors.Count > 0;
+}
