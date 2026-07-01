@@ -133,6 +133,10 @@ public class DataCollectorServiceBase(
                 }
             }
 
+            // Detach this page's tracked candles (loaded existing + any inserts) so the change
+            // tracker stays flat across a long backfill instead of accumulating every candle.
+            dbContext.ChangeTracker.Clear();
+
             var nextCursor = eligible[^1].OpenTime.Add(interval.Duration);
             if (nextCursor <= cursor)
                 break;
@@ -265,6 +269,10 @@ public class DataCollectorServiceBase(
                         await dbContext.SaveChangesAsync(cancellationToken);
                         insertedCount      += toInsert.Count;
                         firstInsertedInGap ??= toInsert[0].OpenTime;
+
+                        // Detach the just-persisted candles so the change tracker doesn't grow
+                        // across the (potentially multi-million-candle) gap backfill.
+                        dbContext.ChangeTracker.Clear();
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {

@@ -11,10 +11,14 @@ public sealed class IndicatorSyncService(
     IMacdService macdService,
     ILogger<IndicatorSyncService> logger) : IIndicatorSyncService
 {
-    private const int SaveChunkSize = 500;
+    // Candles processed per window. Caps peak memory (close/RSI/MACD arrays, existing-row
+    // dictionaries and the EF change tracker are all sized to a window, not the whole range),
+    // so a multi-million-candle recompute stays flat in memory instead of OOM-ing.
+    private const int WindowSize = 5000;
 
     // 200 candles gives Wilder's RSI-14 smoothing well below 0.1% residual error,
-    // and comfortably covers the SMA-100 look-back window.
+    // and comfortably covers the SMA-100 look-back window. Each window is re-seeded with this
+    // much prior context, so windowing matches the single-pass result within that tolerance.
     private const int ContextSize = 200;
 
     public async Task<IndicatorSyncResult> FullSyncPairAsync(
@@ -135,162 +139,174 @@ public sealed class IndicatorSyncService(
         DateTimeOffset to,
         CancellationToken cancellationToken)
     {
-        // Load prior candles for look-back context (SMA-100 needs 99; RSI-14 Wilder's needs ~200).
-        var contextCloses = await dbContext.KlineData
-            .AsNoTracking()
-            .Where(k => k.SymbolId == symbolId && k.IntervalId == intervalId && k.OpenTime < from)
-            .OrderByDescending(k => k.OpenTime)
-            .Take(ContextSize)
-            .OrderBy(k => k.OpenTime)
-            .Select(k => k.Close)
-            .ToListAsync(cancellationToken);
-
-        var targetKlines = await dbContext.KlineData
-            .AsNoTracking()
-            .Where(k => k.SymbolId == symbolId && k.IntervalId == intervalId
-                && k.OpenTime >= from && k.OpenTime <= to)
-            .OrderBy(k => k.OpenTime)
-            .Select(k => new { k.Id, k.Close })
-            .ToListAsync(cancellationToken);
-
-        if (targetKlines.Count == 0)
-            return (0, 0, 0);
-
-        var allCloses = contextCloses.Concat(targetKlines.Select(t => t.Close)).ToList();
-        var contextCount = contextCloses.Count;
-
-        // Compute all indicators in one pass over the combined close-price list so each
-        // algorithm's internal state (Wilder smoothing, EMA carry) is continuous.
-        var allRsiValues = rsiService.ComputeAll(allCloses);
-        var allMacdValues = macdService.ComputeAll(allCloses);
-
-        var targetIds = targetKlines.Select(t => t.Id).ToList();
-
-        // Load existing rows with tracking so EF detects mutations.
-        var existingSmas = await dbContext.SimpleMovingAverages
-            .Where(sma => targetIds.Contains(sma.KlineDataId))
-            .ToDictionaryAsync(sma => sma.KlineDataId, cancellationToken);
-
-        var existingRsis = await dbContext.RelativeStrengthIndexes
-            .Where(rsi => targetIds.Contains(rsi.KlineDataId))
-            .ToDictionaryAsync(rsi => rsi.KlineDataId, cancellationToken);
-
-        var existingMacds = await dbContext.Macd
-            .Where(m => targetIds.Contains(m.KlineDataId))
-            .ToDictionaryAsync(m => m.KlineDataId, cancellationToken);
-
         var insertedCount = 0;
         var updatedCount = 0;
         var skippedCount = 0;
-        var pendingCount = 0;
 
-        for (var i = 0; i < targetKlines.Count; i++)
+        // Walk the range in bounded windows. OpenTimes are unique per symbol/interval, so we
+        // advance with an exclusive lower bound (> the last window's final candle) after the
+        // first (inclusive) window.
+        var cursor = from;
+        var inclusive = true;
+
+        while (true)
         {
-            var target = targetKlines[i];
-            var targetIdx = contextCount + i;
+            var windowQuery = dbContext.KlineData
+                .AsNoTracking()
+                .Where(k => k.SymbolId == symbolId && k.IntervalId == intervalId && k.OpenTime <= to);
 
-            // ── SMA ─────────────────────────────────────────────────────────────
-            var (sma20, sma100) = smaService.Compute(allCloses, targetIdx);
+            windowQuery = inclusive
+                ? windowQuery.Where(k => k.OpenTime >= cursor)
+                : windowQuery.Where(k => k.OpenTime > cursor);
 
-            if (existingSmas.TryGetValue(target.Id, out var existingSma))
+            var targetKlines = await windowQuery
+                .OrderBy(k => k.OpenTime)
+                .Take(WindowSize)
+                .Select(k => new { k.Id, k.OpenTime, k.Close })
+                .ToListAsync(cancellationToken);
+
+            if (targetKlines.Count == 0)
+                break;
+
+            var windowFirstOpenTime = targetKlines[0].OpenTime;
+
+            // Prior candles for look-back context (SMA-100 needs 99; RSI-14 Wilder's needs ~200).
+            // Re-seeded per window so each algorithm's state is continuous within the window.
+            var contextCloses = await dbContext.KlineData
+                .AsNoTracking()
+                .Where(k => k.SymbolId == symbolId && k.IntervalId == intervalId && k.OpenTime < windowFirstOpenTime)
+                .OrderByDescending(k => k.OpenTime)
+                .Take(ContextSize)
+                .OrderBy(k => k.OpenTime)
+                .Select(k => k.Close)
+                .ToListAsync(cancellationToken);
+
+            var allCloses = contextCloses.Concat(targetKlines.Select(t => t.Close)).ToList();
+            var contextCount = contextCloses.Count;
+
+            var allRsiValues = rsiService.ComputeAll(allCloses);
+            var allMacdValues = macdService.ComputeAll(allCloses);
+
+            var targetIds = targetKlines.Select(t => t.Id).ToList();
+
+            // Load existing rows for this window with tracking so EF detects mutations.
+            var existingSmas = await dbContext.SimpleMovingAverages
+                .Where(sma => targetIds.Contains(sma.KlineDataId))
+                .ToDictionaryAsync(sma => sma.KlineDataId, cancellationToken);
+
+            var existingRsis = await dbContext.RelativeStrengthIndexes
+                .Where(rsi => targetIds.Contains(rsi.KlineDataId))
+                .ToDictionaryAsync(rsi => rsi.KlineDataId, cancellationToken);
+
+            var existingMacds = await dbContext.Macd
+                .Where(m => targetIds.Contains(m.KlineDataId))
+                .ToDictionaryAsync(m => m.KlineDataId, cancellationToken);
+
+            for (var i = 0; i < targetKlines.Count; i++)
             {
-                if (existingSma.Sma20 == sma20 && existingSma.Sma100 == sma100)
+                var target = targetKlines[i];
+                var targetIdx = contextCount + i;
+
+                // ── SMA ─────────────────────────────────────────────────────────────
+                var (sma20, sma100) = smaService.Compute(allCloses, targetIdx);
+
+                if (existingSmas.TryGetValue(target.Id, out var existingSma))
                 {
-                    skippedCount++;
+                    if (existingSma.Sma20 == sma20 && existingSma.Sma100 == sma100)
+                    {
+                        skippedCount++;
+                    }
+                    else
+                    {
+                        existingSma.Sma20 = sma20;
+                        existingSma.Sma100 = sma100;
+                        updatedCount++;
+                    }
                 }
                 else
                 {
-                    existingSma.Sma20 = sma20;
-                    existingSma.Sma100 = sma100;
-                    updatedCount++;
-                    pendingCount++;
+                    dbContext.SimpleMovingAverages.Add(new SimpleMovingAverage
+                    {
+                        KlineDataId = target.Id,
+                        Sma20 = sma20,
+                        Sma100 = sma100
+                    });
+                    insertedCount++;
                 }
-            }
-            else
-            {
-                dbContext.SimpleMovingAverages.Add(new SimpleMovingAverage
-                {
-                    KlineDataId = target.Id,
-                    Sma20 = sma20,
-                    Sma100 = sma100
-                });
-                insertedCount++;
-                pendingCount++;
-            }
 
-            // ── RSI ─────────────────────────────────────────────────────────────
-            var rsi = allRsiValues[targetIdx];
-            var rsiSmooth = rsiService.ComputeSmooth(allRsiValues, targetIdx);
-            var divergence = rsiService.DetectDivergence(allCloses, allRsiValues, targetIdx);
+                // ── RSI ─────────────────────────────────────────────────────────────
+                var rsi = allRsiValues[targetIdx];
+                var rsiSmooth = rsiService.ComputeSmooth(allRsiValues, targetIdx);
+                var divergence = rsiService.DetectDivergence(allCloses, allRsiValues, targetIdx);
 
-            if (existingRsis.TryGetValue(target.Id, out var existingRsi))
-            {
-                if (existingRsi.Rsi == rsi && existingRsi.RsiSmooth == rsiSmooth && existingRsi.Divergence == divergence)
+                if (existingRsis.TryGetValue(target.Id, out var existingRsi))
                 {
-                    skippedCount++;
-                }
-                else
-                {
-                    existingRsi.Rsi = rsi;
-                    existingRsi.RsiSmooth = rsiSmooth;
-                    existingRsi.Divergence = divergence;
-                    updatedCount++;
-                    pendingCount++;
-                }
-            }
-            else
-            {
-                dbContext.RelativeStrengthIndexes.Add(new RelativeStrengthIndex
-                {
-                    KlineDataId = target.Id,
-                    Rsi = rsi,
-                    RsiSmooth = rsiSmooth,
-                    Divergence = divergence
-                });
-                insertedCount++;
-                pendingCount++;
-            }
-
-            // ── MACD ────────────────────────────────────────────────────────────
-            var (macdLine, signalLine, histogram) = allMacdValues[targetIdx];
-
-            if (existingMacds.TryGetValue(target.Id, out var existingMacd))
-            {
-                if (existingMacd.MacdLine == macdLine && existingMacd.SignalLine == signalLine && existingMacd.Histogram == histogram)
-                {
-                    skippedCount++;
+                    if (existingRsi.Rsi == rsi && existingRsi.RsiSmooth == rsiSmooth && existingRsi.Divergence == divergence)
+                    {
+                        skippedCount++;
+                    }
+                    else
+                    {
+                        existingRsi.Rsi = rsi;
+                        existingRsi.RsiSmooth = rsiSmooth;
+                        existingRsi.Divergence = divergence;
+                        updatedCount++;
+                    }
                 }
                 else
                 {
-                    existingMacd.MacdLine = macdLine;
-                    existingMacd.SignalLine = signalLine;
-                    existingMacd.Histogram = histogram;
-                    updatedCount++;
-                    pendingCount++;
+                    dbContext.RelativeStrengthIndexes.Add(new RelativeStrengthIndex
+                    {
+                        KlineDataId = target.Id,
+                        Rsi = rsi,
+                        RsiSmooth = rsiSmooth,
+                        Divergence = divergence
+                    });
+                    insertedCount++;
+                }
+
+                // ── MACD ────────────────────────────────────────────────────────────
+                var (macdLine, signalLine, histogram) = allMacdValues[targetIdx];
+
+                if (existingMacds.TryGetValue(target.Id, out var existingMacd))
+                {
+                    if (existingMacd.MacdLine == macdLine && existingMacd.SignalLine == signalLine && existingMacd.Histogram == histogram)
+                    {
+                        skippedCount++;
+                    }
+                    else
+                    {
+                        existingMacd.MacdLine = macdLine;
+                        existingMacd.SignalLine = signalLine;
+                        existingMacd.Histogram = histogram;
+                        updatedCount++;
+                    }
+                }
+                else
+                {
+                    dbContext.Macd.Add(new Macd
+                    {
+                        KlineDataId = target.Id,
+                        MacdLine = macdLine,
+                        SignalLine = signalLine,
+                        Histogram = histogram
+                    });
+                    insertedCount++;
                 }
             }
-            else
-            {
-                dbContext.Macd.Add(new Macd
-                {
-                    KlineDataId = target.Id,
-                    MacdLine = macdLine,
-                    SignalLine = signalLine,
-                    Histogram = histogram
-                });
-                insertedCount++;
-                pendingCount++;
-            }
 
-            if (pendingCount >= SaveChunkSize)
-            {
-                await dbContext.SaveChangesAsync(cancellationToken);
-                pendingCount = 0;
-            }
-        }
-
-        if (pendingCount > 0)
             await dbContext.SaveChangesAsync(cancellationToken);
+
+            // Detach this window's tracked entities so the change tracker stays flat across the
+            // whole range instead of growing to millions of entries.
+            dbContext.ChangeTracker.Clear();
+
+            if (targetKlines.Count < WindowSize)
+                break;
+
+            cursor = targetKlines[^1].OpenTime;
+            inclusive = false;
+        }
 
         return (insertedCount, updatedCount, skippedCount);
     }
