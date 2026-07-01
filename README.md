@@ -488,12 +488,14 @@ record (and a `Location` header to its status). Poll `GET /api/jobs/{id}` for pr
   can't be double-run.
 - Each pair is processed in its own DI scope so the EF change tracker doesn't accumulate across a
   multi-day run, and a single failing pair is logged and skipped rather than aborting the whole job.
-- **Per-candle errors are recorded.** Data collection captures failures at the candle level instead
-  of throwing: a bad candle (or a failed batch persist) is skipped and logged, and the collector
-  returns the errors on its result. For job-driven syncs the executor persists each one as a
-  `sync_job_errors` row linked to the job (`syncJobId` FK, plus the `symbol`, `interval` and
-  `candleOpenTime` it refers to). `GET /api/jobs/{id}` returns the job together with these linked
-  errors, so a run's failures can be inspected afterwards.
+- **Errors are recorded per job.** Two kinds of failure are captured as `sync_job_errors` rows linked
+  to the job (`syncJobId` FK, plus the `symbol`, `interval` and `candleOpenTime` they refer to):
+  *per-candle* failures — data collection captures these at the candle level instead of throwing, so a
+  bad candle (or a failed batch persist) is skipped, logged, and returned on the collector's result;
+  and *whole-pair* failures — when an entire `symbol × interval` throws, the pair is logged, skipped
+  (the job continues), and recorded with a null `candleOpenTime`. Every error counted in the job's
+  `message` therefore has a matching row. `GET /api/jobs/{id}` returns the job together with these
+  linked errors, so a run's failures can be inspected afterwards.
 - **Resumable:** on startup the worker re-queues any job left `Pending`/`Running` by a previous
   process. Because both syncs are idempotent (collection skips existing candles; indicator sync
   upserts), an interrupted job simply resumes after a restart or redeploy.

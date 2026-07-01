@@ -71,6 +71,14 @@ public sealed class SyncJobExecutor(
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         errorCount++;
+                        statusDb.SyncJobErrors.Add(new SyncJobError
+                        {
+                            SyncJobId      = job.Id,
+                            Symbol         = symbol.Code,
+                            Interval       = interval.Code,
+                            CandleOpenTime = null, // whole-pair failure, not tied to a single candle
+                            Message        = Truncate(ex.Message, 2000),
+                        });
                         logger.LogError(ex,
                             "Sync job {JobId}: pair {Symbol}/{Interval} failed",
                             job.Id, symbol.Code, interval.Code);
@@ -114,6 +122,9 @@ public sealed class SyncJobExecutor(
             logger.LogError(ex, "Sync job {JobId} failed", job.Id);
         }
     }
+
+    private static string Truncate(string value, int maxLength) =>
+        value.Length <= maxLength ? value : value[..maxLength];
 
     private async Task<(List<Symbol> Symbols, List<Interval> Intervals)> LoadPairsAsync(
         ApplicationDbContext db,
