@@ -26,7 +26,7 @@ using TraderAlgoApi.Services.TradingAccounts;
 using TraderAlgoApi.Services.TradingStrategies;
 using TraderAlgoApi.WebSockets;
 
-const string LocalDevelopmentCorsPolicy = "LocalDevelopmentCorsPolicy";
+const string ApiCorsPolicy = "ApiCorsPolicy";
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -53,12 +53,27 @@ builder.Services.AddSwaggerGen(options =>
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 
+// Allowed browser origins: localhost for dev, plus any configured for deployed
+// front-ends. `Cors:AllowedOrigins` is a comma/semicolon-separated list (set via
+// the `Cors__AllowedOrigins` env var on the host, or appsettings). Credentials
+// aren't used — the API key travels in the X-Api-Key header, not cookies.
+var allowedOrigins = new[]
+    {
+        "http://localhost:4200",
+        "http://localhost:5111",
+        "https://localhost:7096",
+    }
+    .Concat((builder.Configuration["Cors:AllowedOrigins"] ?? string.Empty)
+        .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    .Distinct(StringComparer.OrdinalIgnoreCase)
+    .ToArray();
+
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy(LocalDevelopmentCorsPolicy, policy =>
+    options.AddPolicy(ApiCorsPolicy, policy =>
     {
         policy
-            .WithOrigins("http://localhost:4200", "http://localhost:5111", "https://localhost:7096")
+            .WithOrigins(allowedOrigins)
             .AllowAnyHeader()
             .AllowAnyMethod();
     });
@@ -184,7 +199,7 @@ if (!app.Environment.IsDevelopment())
         applicationBuilder => applicationBuilder.UseHttpsRedirection());
 }
 
-app.UseCors(LocalDevelopmentCorsPolicy);
+app.UseCors(ApiCorsPolicy);
 
 // Require the API key on all endpoints (REST via X-Api-Key, WebSockets via ?apiKey=). Placed
 // after CORS so the policy's headers are applied to 401 responses and preflight is handled first.
