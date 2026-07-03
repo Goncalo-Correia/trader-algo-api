@@ -18,6 +18,11 @@ using TraderAlgoApi.Services.Rules.SmaMacd;
 
 namespace TraderAlgoApi.Services.Backtests;
 
+// Compute/replay split: the simulation runs to completion (ComputeAsync, no socket
+// involvement) persisting trades and progress; the WebSocket then replays the finished
+// run from the database (ReplayAsync). This removes streaming overhead from the sim
+// itself, structurally guarantees candle-before-trade ordering, and makes a completed
+// run re-watchable (the basis for future scrub/seek).
 public sealed class BacktestStreamService(
     IDbContextFactory<ApplicationDbContext> dbContextFactory,
     SmaTradingRule smaTradingRule,
@@ -79,11 +84,12 @@ public sealed class BacktestStreamService(
             return;
         }
 
-        if ((BacktestStatus)backtest.StatusId is not (BacktestStatus.Pending or BacktestStatus.Running))
+        // Pending/Running runs are computed first; Completed runs go straight to replay.
+        if ((BacktestStatus)backtest.StatusId is not (BacktestStatus.Pending or BacktestStatus.Running or BacktestStatus.Completed))
         {
             context.Response.StatusCode = StatusCodes.Status400BadRequest;
             await context.Response.WriteAsync(
-                $"Backtest {backtestId} cannot be started: status is {(BacktestStatus)backtest.StatusId}.",
+                $"Backtest {backtestId} cannot be streamed: status is {(BacktestStatus)backtest.StatusId}.",
                 cancellationToken);
             return;
         }
@@ -95,17 +101,24 @@ public sealed class BacktestStreamService(
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, disconnectCts.Token);
         var monitorTask = MonitorClientAsync(clientSocket, disconnectCts, linked.Token);
 
-        // Transition Pending → Running.
-        backtest.StatusId = (int)BacktestStatus.Running;
-        await dbContext.SaveChangesAsync(cancellationToken);
-
+        var computing = false;
         try
         {
-            await RunSimulationAsync(dbContext, clientSocket, backtest, delay, linked.Token);
+            if ((BacktestStatus)backtest.StatusId is BacktestStatus.Pending or BacktestStatus.Running)
+            {
+                computing = true;
+                backtest.StatusId = (int)BacktestStatus.Running;
+                await dbContext.SaveChangesAsync(cancellationToken);
 
-            backtest.StatusId = (int)BacktestStatus.Completed;
-            backtest.CompletedAt = timeProvider.GetUtcNow();
-            await dbContext.SaveChangesAsync(CancellationToken.None);
+                await ComputeAsync(dbContext, backtest, linked.Token);
+
+                backtest.StatusId = (int)BacktestStatus.Completed;
+                backtest.CompletedAt = timeProvider.GetUtcNow();
+                await dbContext.SaveChangesAsync(CancellationToken.None);
+                computing = false;
+            }
+
+            await ReplayAsync(dbContext, clientSocket, backtest, delay, linked.Token);
 
             if (clientSocket.State == WebSocketState.Open)
             {
@@ -117,23 +130,32 @@ public sealed class BacktestStreamService(
         }
         catch (OperationCanceledException) when (disconnectCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            logger.LogInformation("Backtest {Id} cancelled: client disconnected", backtest.Id);
-            backtest.StatusId = (int)BacktestStatus.Cancelled;
-            backtest.CompletedAt = timeProvider.GetUtcNow();
-            await dbContext.SaveChangesAsync(CancellationToken.None);
+            logger.LogInformation("Backtest {Id} stream stopped: client disconnected", backtest.Id);
+            if (computing)
+            {
+                backtest.StatusId = (int)BacktestStatus.Cancelled;
+                backtest.CompletedAt = timeProvider.GetUtcNow();
+                await dbContext.SaveChangesAsync(CancellationToken.None);
+            }
         }
         catch (OperationCanceledException)
         {
-            backtest.StatusId = (int)BacktestStatus.Cancelled;
-            backtest.CompletedAt = timeProvider.GetUtcNow();
-            await dbContext.SaveChangesAsync(CancellationToken.None);
+            if (computing)
+            {
+                backtest.StatusId = (int)BacktestStatus.Cancelled;
+                backtest.CompletedAt = timeProvider.GetUtcNow();
+                await dbContext.SaveChangesAsync(CancellationToken.None);
+            }
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Backtest {Id} stream failed", backtest.Id);
-            backtest.StatusId = (int)BacktestStatus.Failed;
-            backtest.CompletedAt = timeProvider.GetUtcNow();
-            await dbContext.SaveChangesAsync(CancellationToken.None);
+            if (computing)
+            {
+                backtest.StatusId = (int)BacktestStatus.Failed;
+                backtest.CompletedAt = timeProvider.GetUtcNow();
+                await dbContext.SaveChangesAsync(CancellationToken.None);
+            }
         }
         finally
         {
@@ -143,14 +165,13 @@ public sealed class BacktestStreamService(
     }
 
     // -------------------------------------------------------------------------
-    // Simulation
+    // Compute: run the simulation to completion, persisting trades and progress.
+    // No socket involvement — a fast run no longer pays any streaming overhead.
     // -------------------------------------------------------------------------
 
-    private async Task RunSimulationAsync(
+    private async Task ComputeAsync(
         ApplicationDbContext dbContext,
-        WebSocket clientSocket,
         Backtest backtest,
-        bool delay,
         CancellationToken cancellationToken)
     {
         var bot = backtest.TradeBot!;
@@ -158,20 +179,7 @@ public sealed class BacktestStreamService(
         if ((TradingStrategy)bot.TradingStrategyId == TradingStrategy.MlPolicy && bot.MlPolicy is null)
             throw new InvalidOperationException($"Backtest {backtest.Id} uses ML Policy but its tradebot has no linked ML policy.");
 
-        var rangeCandles = await dbContext.KlineData
-            .AsNoTracking()
-            .Where(k => k.SymbolId == backtest.SymbolId &&
-                        k.IntervalId == backtest.IntervalId &&
-                        k.OpenTime >= backtest.From &&
-                        k.OpenTime <= backtest.To)
-            .Include(k => k.SimpleMovingAverage)
-            .Include(k => k.RelativeStrengthIndex)
-            .Include(k => k.Macd)
-            .OrderBy(k => k.OpenTime)
-            .ToListAsync(cancellationToken);
-
-        if (bot.IsNySessionOnly)
-            rangeCandles = rangeCandles.Where(BacktestSimulationEngine.IsNySessionCandle).ToList();
+        var rangeCandles = await LoadRangeCandlesAsync(dbContext, backtest, bot.IsNySessionOnly, cancellationToken);
 
         // When NY-session-only, fetch enough prior candles to find 2 that fall within session hours.
         var priorLookback = bot.IsNySessionOnly ? 20 : 2;
@@ -224,7 +232,7 @@ public sealed class BacktestStreamService(
                 lastClosedCandleIndex = index;
         }
 
-        // Skip already-emitted candles; always need at least 2 items before current.
+        // Skip already-computed candles; always need at least 2 items before current.
         var startIndex = Math.Max(2, priorCandles.Count + backtest.CandleCount);
 
         // Restore candle-age of a resumed open trade so MaxCandlesPerTrade still fires correctly.
@@ -238,22 +246,6 @@ public sealed class BacktestStreamService(
 
         var candlesSinceFlush = 0;
 
-        var symbolCode   = backtest.Symbol.Code;
-        var intervalCode = backtest.Interval.Code;
-
-        // Candle frames are coalesced into a single message. The buffer is always flushed
-        // *before* a trade/bracket event so the client has already rendered the candle the
-        // event refers to — markers can then only ever resolve to a bar that exists.
-        var candleBuffer = new List<CandleWithIndicatorsResponseDto>(CandleBatchSize);
-
-        async Task FlushCandlesAsync()
-        {
-            if (candleBuffer.Count == 0)
-                return;
-            await SendMessageAsync(clientSocket, "candleBatch", candleBuffer, cancellationToken);
-            candleBuffer.Clear();
-        }
-
         for (var i = startIndex; i < combined.Count; i++)
         {
             var current      = combined[i];
@@ -263,16 +255,6 @@ public sealed class BacktestStreamService(
             var context = BacktestSimulationEngine.BuildContext(
                 backtest.Symbol.Code, backtest.Interval.Code,
                 secondPrev, previous, current);
-
-            if (delay)
-                await Task.Delay(CandleInterval, cancellationToken);
-
-            // Emit the candle before evaluating trades: every trade/bracket event below
-            // refers to this candle, and the client must hold it first for the marker to
-            // land on the right bar. Delay mode flushes one candle at a time for pacing.
-            candleBuffer.Add(ToDto(current));
-            if (delay)
-                await FlushCandlesAsync();
 
             // Advance per-trade candle counter.
             if (openTrade is not null)
@@ -286,10 +268,6 @@ public sealed class BacktestStreamService(
                 {
                     BacktestSimulationEngine.CloseTrade(openTrade, closePrice!.Value, closeReason.Value, current.OpenTime, ref balance);
                     await dbContext.SaveChangesAsync(cancellationToken);
-
-                    await FlushCandlesAsync();
-                    await SendMessageAsync(clientSocket, "tradeClosed",
-                        ToTradeDto(openTrade, symbolCode, intervalCode), cancellationToken);
 
                     ApplyDailyStat(dailyStats, openTrade);
                     closedTradeHistory.Add(openTrade);
@@ -307,10 +285,6 @@ public sealed class BacktestStreamService(
                 BacktestSimulationEngine.CloseTrade(openTrade, current.Close, TradeCloseReason.Manual, current.OpenTime, ref balance);
                 await dbContext.SaveChangesAsync(cancellationToken);
 
-                await FlushCandlesAsync();
-                await SendMessageAsync(clientSocket, "tradeClosed",
-                    ToTradeDto(openTrade, symbolCode, intervalCode), cancellationToken);
-
                 ApplyDailyStat(dailyStats, openTrade);
                 closedTradeHistory.Add(openTrade);
                 lastClosedCandleIndex = i;
@@ -326,11 +300,6 @@ public sealed class BacktestStreamService(
                 {
                     openTrade.StopLoss = bot.BreakevenStop.HasValue ? -bot.BreakevenStop.Value : 0m;
                     await dbContext.SaveChangesAsync(cancellationToken);
-
-                    await FlushCandlesAsync();
-                    await SendMessageAsync(clientSocket, "tradeBracketUpdate",
-                        new TradeBracketUpdateDto(openTrade.Id, openTrade.StopLoss, openTrade.TakeProfit),
-                        cancellationToken);
                 }
             }
 
@@ -384,17 +353,9 @@ public sealed class BacktestStreamService(
                     dbContext.Trades.Add(openTrade);
                     await dbContext.SaveChangesAsync(cancellationToken);
 
-                    await FlushCandlesAsync();
-                    await SendMessageAsync(clientSocket, "tradeOpened",
-                        ToTradeDto(openTrade, symbolCode, intervalCode), cancellationToken);
-
                     openTradeCandles = 1;
                 }
             }
-
-            // Outside delay mode the buffer is paced by size rather than time.
-            if (candleBuffer.Count >= CandleBatchSize)
-                await FlushCandlesAsync();
 
             // Track incremental progress in memory; flush periodically so REST endpoints reflect
             // current state without a DB round-trip on every single candle.
@@ -416,18 +377,114 @@ public sealed class BacktestStreamService(
             BacktestSimulationEngine.CloseTrade(openTrade, last.Close, TradeCloseReason.Manual, last.CloseTime, ref balance);
             backtest.FinalBalance = balance;
             backtest.Pnl = balance - backtest.InitialBalance;
-            await dbContext.SaveChangesAsync(cancellationToken);
-
-            await FlushCandlesAsync();
-            await SendMessageAsync(clientSocket, "tradeClosed",
-                ToTradeDto(openTrade, symbolCode, intervalCode), cancellationToken);
         }
-
-        // Flush any candles still buffered after the loop.
-        await FlushCandlesAsync();
 
         // Final flush of any progress accumulated since the last batch.
         await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    // -------------------------------------------------------------------------
+    // Replay: stream a finished run from the database. Candles are emitted in
+    // order with the trades interleaved at their persisted open/close times, so
+    // a trade event can only ever reference a bar the client already holds.
+    // -------------------------------------------------------------------------
+
+    private async Task ReplayAsync(
+        ApplicationDbContext dbContext,
+        WebSocket clientSocket,
+        Backtest backtest,
+        bool delay,
+        CancellationToken cancellationToken)
+    {
+        var isNySessionOnly = backtest.TradeBot?.IsNySessionOnly ?? false;
+        var rangeCandles = await LoadRangeCandlesAsync(dbContext, backtest, isNySessionOnly, cancellationToken);
+
+        var symbolCode   = backtest.Symbol.Code;
+        var intervalCode = backtest.Interval.Code;
+
+        var trades = await dbContext.Trades
+            .AsNoTracking()
+            .Where(t => t.BacktestId == backtest.Id)
+            .ToListAsync(cancellationToken);
+
+        // Note: breakeven bracket updates are not replayed — their timing is not
+        // persisted, so a replayed tradeOpened simply carries the trade's final
+        // stop loss. Markers and PnL are unaffected.
+        var pendingOpens = new Queue<Trade>(
+            trades.Where(t => t.OpenedAt.HasValue).OrderBy(t => t.OpenedAt));
+        var pendingCloses = new Queue<Trade>(
+            trades.Where(t => t.ClosedAt.HasValue).OrderBy(t => t.ClosedAt));
+
+        var candleBuffer = new List<CandleWithIndicatorsResponseDto>(CandleBatchSize);
+
+        async Task FlushCandlesAsync()
+        {
+            if (candleBuffer.Count == 0)
+                return;
+            await SendMessageAsync(clientSocket, "candleBatch", candleBuffer, cancellationToken);
+            candleBuffer.Clear();
+        }
+
+        foreach (var candle in rangeCandles)
+        {
+            if (delay)
+                await Task.Delay(CandleInterval, cancellationToken);
+
+            candleBuffer.Add(ToDto(candle));
+            if (delay)
+                await FlushCandlesAsync();
+
+            while (pendingOpens.Count > 0 && pendingOpens.Peek().OpenedAt!.Value <= candle.OpenTime)
+            {
+                await FlushCandlesAsync();
+                await SendMessageAsync(clientSocket, "tradeOpened",
+                    ToTradeDto(pendingOpens.Dequeue(), symbolCode, intervalCode), cancellationToken);
+            }
+
+            while (pendingCloses.Count > 0 && pendingCloses.Peek().ClosedAt!.Value <= candle.OpenTime)
+            {
+                await FlushCandlesAsync();
+                await SendMessageAsync(clientSocket, "tradeClosed",
+                    ToTradeDto(pendingCloses.Dequeue(), symbolCode, intervalCode), cancellationToken);
+            }
+
+            // Outside delay mode the buffer is paced by size rather than time.
+            if (candleBuffer.Count >= CandleBatchSize)
+                await FlushCandlesAsync();
+        }
+
+        await FlushCandlesAsync();
+
+        // Force-closed trades carry the final candle's CloseTime, which lands after the
+        // last OpenTime — emit anything still pending once all candles are out.
+        while (pendingCloses.Count > 0)
+        {
+            await SendMessageAsync(clientSocket, "tradeClosed",
+                ToTradeDto(pendingCloses.Dequeue(), symbolCode, intervalCode), cancellationToken);
+        }
+    }
+
+    private static async Task<List<KlineData>> LoadRangeCandlesAsync(
+        ApplicationDbContext dbContext,
+        Backtest backtest,
+        bool isNySessionOnly,
+        CancellationToken cancellationToken)
+    {
+        var rangeCandles = await dbContext.KlineData
+            .AsNoTracking()
+            .Where(k => k.SymbolId == backtest.SymbolId &&
+                        k.IntervalId == backtest.IntervalId &&
+                        k.OpenTime >= backtest.From &&
+                        k.OpenTime <= backtest.To)
+            .Include(k => k.SimpleMovingAverage)
+            .Include(k => k.RelativeStrengthIndex)
+            .Include(k => k.Macd)
+            .OrderBy(k => k.OpenTime)
+            .ToListAsync(cancellationToken);
+
+        return isNySessionOnly
+            ? rangeCandles.Where(BacktestSimulationEngine.IsNySessionCandle).ToList()
+            : rangeCandles;
     }
 
     // -------------------------------------------------------------------------
