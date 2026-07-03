@@ -18,25 +18,14 @@ public sealed class ChartsController(ApplicationDbContext dbContext) : Controlle
         [FromQuery] int lookback = DefaultLookback,
         CancellationToken cancellationToken = default)
     {
-        var symbolCode = string.IsNullOrWhiteSpace(symbol)
-            ? await dbContext.Symbols
-                .Where(s => s.IsDefault)
-                .Select(s => s.Code)
-                .FirstOrDefaultAsync(cancellationToken) ?? string.Empty
-            : symbol;
-
-        var intervalCode = string.IsNullOrWhiteSpace(interval)
-            ? await dbContext.Intervals
-                .Where(i => i.IsDefault)
-                .Select(i => i.Code)
-                .FirstOrDefaultAsync(cancellationToken) ?? string.Empty
-            : interval;
+        var symbolId = await ResolveSymbolIdAsync(symbol, cancellationToken);
+        var intervalId = await ResolveIntervalIdAsync(interval, cancellationToken);
+        if (symbolId is null || intervalId is null)
+            return Ok(Array.Empty<CandleResponseDto>());
 
         var candles = await dbContext.KlineData
             .AsNoTracking()
-            .Where(kline =>
-                kline.Symbol.Code == symbolCode &&
-                kline.Interval.Code == intervalCode)
+            .Where(kline => kline.SymbolId == symbolId.Value && kline.IntervalId == intervalId.Value)
             .OrderByDescending(kline => kline.OpenTime)
             .Take(lookback)
             .OrderBy(kline => kline.OpenTime)
@@ -61,25 +50,14 @@ public sealed class ChartsController(ApplicationDbContext dbContext) : Controlle
         [FromQuery] int lookback = DefaultLookback,
         CancellationToken cancellationToken = default)
     {
-        var symbolCode = string.IsNullOrWhiteSpace(symbol)
-            ? await dbContext.Symbols
-                .Where(s => s.IsDefault)
-                .Select(s => s.Code)
-                .FirstOrDefaultAsync(cancellationToken) ?? string.Empty
-            : symbol;
-
-        var intervalCode = string.IsNullOrWhiteSpace(interval)
-            ? await dbContext.Intervals
-                .Where(i => i.IsDefault)
-                .Select(i => i.Code)
-                .FirstOrDefaultAsync(cancellationToken) ?? string.Empty
-            : interval;
+        var symbolId = await ResolveSymbolIdAsync(symbol, cancellationToken);
+        var intervalId = await ResolveIntervalIdAsync(interval, cancellationToken);
+        if (symbolId is null || intervalId is null)
+            return Ok(Array.Empty<CandleWithIndicatorsResponseDto>());
 
         var candles = await dbContext.KlineData
             .AsNoTracking()
-            .Where(kline =>
-                kline.Symbol.Code == symbolCode &&
-                kline.Interval.Code == intervalCode)
+            .Where(kline => kline.SymbolId == symbolId.Value && kline.IntervalId == intervalId.Value)
             .OrderByDescending(kline => kline.OpenTime)
             .Take(lookback)
             .OrderBy(kline => kline.OpenTime)
@@ -120,25 +98,16 @@ public sealed class ChartsController(ApplicationDbContext dbContext) : Controlle
         var fromInstant = new DateTimeOffset(from.Year, from.Month, from.Day, 0, 0, 0, TimeSpan.Zero);
         var toInstant = new DateTimeOffset(to.Year, to.Month, to.Day, 23, 59, 0, TimeSpan.Zero);
 
-        var symbolCode = string.IsNullOrWhiteSpace(symbol)
-            ? await dbContext.Symbols
-                .Where(s => s.IsDefault)
-                .Select(s => s.Code)
-                .FirstOrDefaultAsync(cancellationToken) ?? string.Empty
-            : symbol;
-
-        var intervalCode = string.IsNullOrWhiteSpace(interval)
-            ? await dbContext.Intervals
-                .Where(i => i.IsDefault)
-                .Select(i => i.Code)
-                .FirstOrDefaultAsync(cancellationToken) ?? string.Empty
-            : interval;
+        var symbolId = await ResolveSymbolIdAsync(symbol, cancellationToken);
+        var intervalId = await ResolveIntervalIdAsync(interval, cancellationToken);
+        if (symbolId is null || intervalId is null)
+            return Ok(Array.Empty<CandleWithIndicatorsResponseDto>());
 
         var candles = await dbContext.KlineData
             .AsNoTracking()
             .Where(kline =>
-                kline.Symbol.Code == symbolCode &&
-                kline.Interval.Code == intervalCode &&
+                kline.SymbolId == symbolId.Value &&
+                kline.IntervalId == intervalId.Value &&
                 kline.OpenTime >= fromInstant &&
                 kline.OpenTime <= toInstant)
             .OrderBy(kline => kline.OpenTime)
@@ -162,5 +131,27 @@ public sealed class ChartsController(ApplicationDbContext dbContext) : Controlle
             .ToListAsync(cancellationToken);
 
         return Ok(candles);
+    }
+
+    // Resolve the symbol/interval to its primary key up front. Filtering KlineData by the
+    // indexed SymbolId/IntervalId columns (rather than the Symbol.Code/Interval.Code navigation
+    // properties) lets Postgres seek the (SymbolId, IntervalId, OpenTime) index directly — the
+    // "latest N by OpenTime" then becomes a backward index scan with no sort or wide join.
+    private async Task<int?> ResolveSymbolIdAsync(string? symbol, CancellationToken cancellationToken)
+    {
+        var query = string.IsNullOrWhiteSpace(symbol)
+            ? dbContext.Symbols.Where(s => s.IsDefault)
+            : dbContext.Symbols.Where(s => s.Code == symbol);
+
+        return await query.Select(s => (int?)s.Id).FirstOrDefaultAsync(cancellationToken);
+    }
+
+    private async Task<int?> ResolveIntervalIdAsync(string? interval, CancellationToken cancellationToken)
+    {
+        var query = string.IsNullOrWhiteSpace(interval)
+            ? dbContext.Intervals.Where(i => i.IsDefault)
+            : dbContext.Intervals.Where(i => i.Code == interval);
+
+        return await query.Select(i => (int?)i.Id).FirstOrDefaultAsync(cancellationToken);
     }
 }
