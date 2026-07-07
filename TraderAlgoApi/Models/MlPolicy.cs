@@ -7,7 +7,9 @@ namespace TraderAlgoApi.Models;
 /// <summary>
 /// A reusable training configuration: which model to train on which symbol/interval, plus all
 /// PPO/risk hyperparameters. One policy can have many <see cref="MlTrainingRun"/>s (each run trains
-/// this policy over a chosen date range). Risk params are absolute amounts (matching backtests).
+/// this policy over a chosen date range). Cash risk params are absolute amounts (matching backtests);
+/// <see cref="Breakeven"/>/<see cref="BreakevenStop"/> are ATR multipliers (see their docs). The
+/// stop-loss and take-profit brackets are chosen by the model at entry, so they are not stored here.
 /// </summary>
 [Table("ml_policies")]
 public sealed class MlPolicy
@@ -34,15 +36,19 @@ public sealed class MlPolicy
     [Precision(28, 10)]
     public decimal Quantity { get; set; }
 
-    [Precision(28, 10)]
-    public decimal TakeProfit { get; set; }
-
-    [Precision(28, 10)]
-    public decimal StopLoss { get; set; }
-
+    /// <summary>
+    /// Breakeven trigger as an ATR multiplier evaluated against ATR at entry: the stop is moved to
+    /// breakeven once price reaches entry ± (Breakeven × ATR_at_entry). Not an absolute price offset.
+    /// 0 disables the breakeven ratchet. Typical range ~0.5–2.0.
+    /// </summary>
     [Precision(28, 10)]
     public decimal Breakeven { get; set; }
 
+    /// <summary>
+    /// Ratcheted stop as an ATR multiplier evaluated against ATR at entry: once breakeven triggers,
+    /// the stop moves to entry ± (BreakevenStop × ATR_at_entry). Not an absolute price offset.
+    /// Typical range ~0.0–1.0.
+    /// </summary>
     [Precision(28, 10)]
     public decimal BreakevenStop { get; set; }
 
@@ -59,9 +65,6 @@ public sealed class MlPolicy
     public decimal DailyDrawdownLimit { get; set; }
 
     public int MaxCandlesPerTrade { get; set; }
-
-    [Precision(28, 10)]
-    public decimal MaxTrailingDrawdown { get; set; }
 
     // ---------------------------------------------------------------------
     // Optional ML training tuning parameters (§3). All nullable: when null the

@@ -126,8 +126,6 @@ public sealed class MlPoliciesController(
         policy.TotalTimesteps      = r.TotalTimesteps;
         policy.InitialBalance      = r.InitialBalance;
         policy.Quantity            = r.Quantity;
-        policy.TakeProfit          = r.TakeProfit;
-        policy.StopLoss            = r.StopLoss;
         policy.Breakeven           = r.Breakeven;
         policy.BreakevenStop       = r.BreakevenStop;
         policy.Fee                 = r.Fee;
@@ -135,7 +133,6 @@ public sealed class MlPoliciesController(
         policy.DailyProfit         = r.DailyProfit;
         policy.DailyDrawdownLimit  = r.DailyDrawdownLimit;
         policy.MaxCandlesPerTrade  = r.MaxCandlesPerTrade;
-        policy.MaxTrailingDrawdown = r.MaxTrailingDrawdown;
         policy.EpisodeDays             = r.EpisodeDays;
         policy.EntryCost               = r.EntryCost;
         policy.NoTradeDayPenalty       = r.NoTradeDayPenalty;
@@ -163,8 +160,6 @@ public sealed class MlPoliciesController(
             TotalTimesteps:      p.TotalTimesteps,
             InitialBalance:      p.InitialBalance,
             Quantity:            p.Quantity,
-            TakeProfit:          p.TakeProfit,
-            StopLoss:            p.StopLoss,
             Breakeven:           p.Breakeven,
             BreakevenStop:       p.BreakevenStop,
             Fee:                 p.Fee,
@@ -172,7 +167,6 @@ public sealed class MlPoliciesController(
             DailyProfit:         p.DailyProfit,
             DailyDrawdownLimit:  p.DailyDrawdownLimit,
             MaxCandlesPerTrade:  p.MaxCandlesPerTrade,
-            MaxTrailingDrawdown: p.MaxTrailingDrawdown,
             EpisodeDays:             p.EpisodeDays,
             EntryCost:               p.EntryCost,
             NoTradeDayPenalty:       p.NoTradeDayPenalty,

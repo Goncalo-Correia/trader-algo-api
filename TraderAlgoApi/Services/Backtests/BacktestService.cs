@@ -30,8 +30,11 @@ public sealed class BacktestService(
         var tradingStrategyId = request.TradingStrategyId ?? templateBot.TradingStrategyId;
         var mlPolicy = await ResolveMlPolicyAsync(request, templateBot, tradingStrategyId, symbol.Code, interval.Code, cancellationToken);
         var quantity = mlPolicy?.Quantity ?? request.Quantity ?? templateBot.Quantity;
-        var stopLoss = mlPolicy?.StopLoss ?? request.StopLoss ?? templateBot.StopLoss;
-        var takeProfit = mlPolicy?.TakeProfit ?? request.TakeProfit ?? templateBot.TakeProfit;
+        // ML policies no longer carry fixed stop-loss/take-profit brackets: the model chooses the
+        // ATR-sized SL/TP bracket at entry. For ML backtests SL/TP stay unset unless the request
+        // supplies them; indicator strategies keep using the request/template values.
+        var stopLoss = mlPolicy is not null ? request.StopLoss : request.StopLoss ?? templateBot.StopLoss;
+        var takeProfit = mlPolicy is not null ? request.TakeProfit : request.TakeProfit ?? templateBot.TakeProfit;
         var breakeven = mlPolicy?.Breakeven ?? request.Breakeven;
         var breakevenStop = mlPolicy?.BreakevenStop ?? request.BreakevenStop;
         var fee = mlPolicy?.Fee ?? request.Fee;

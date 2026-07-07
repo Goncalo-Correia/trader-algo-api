@@ -13,8 +13,7 @@ public sealed record MlTrainRequest(
     [property: JsonPropertyName("total_timesteps")] int TotalTimesteps,
     [property: JsonPropertyName("initial_balance")] decimal InitialBalance,
     [property: JsonPropertyName("quantity")] decimal Quantity,
-    [property: JsonPropertyName("stop_loss")] decimal StopLoss,
-    [property: JsonPropertyName("take_profit")] decimal TakeProfit,
+    // ATR multipliers (evaluated against ATR at entry), not absolute price offsets. 0 disables breakeven.
     [property: JsonPropertyName("breakeven")] decimal Breakeven,
     [property: JsonPropertyName("breakeven_stop")] decimal BreakevenStop,
     [property: JsonPropertyName("max_candles_per_trade")] int MaxCandlesPerTrade,
@@ -22,7 +21,6 @@ public sealed record MlTrainRequest(
     [property: JsonPropertyName("daily_drawdown_limit")] decimal DailyDrawdownLimit,
     [property: JsonPropertyName("fee_rate")] decimal FeeRate,
     [property: JsonPropertyName("slippage_rate")] decimal SlippageRate,
-    [property: JsonPropertyName("max_trailing_drawdown_threshold")] decimal MaxTrailingDrawdownThreshold,
 
     // Optional tuning parameters (§3). Null values are omitted so the ML service applies its
     // own defaults, preserving prior behavior.

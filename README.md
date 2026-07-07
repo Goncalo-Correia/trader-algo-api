@@ -263,9 +263,10 @@ Key fields: `tradingStrategyId`, `mlPolicyId` (required when the strategy is **M
 `isNySessionOnly`, `delay`, `dailyProfitGoal`, `maxLossesPerDay`, `maxCandlesPerTrade`, `isEnabled`.
 
 When `tradingStrategyId` is **ML Policy** the bot must reference an `mlPolicyId`: the policy's
-symbol/interval must match the bot's, and its risk settings (SL/TP, breakeven, fee, daily limits)
-are copied onto the bot. The entry signal then comes from the ML sidecar instead of an indicator
-rule. Any other strategy rejects an `mlPolicyId`.
+symbol/interval must match the bot's, and its risk settings (breakeven, fee, daily limits) are copied
+onto the bot. Stop-loss/take-profit are **not** copied — the model chooses the ATR-sized SL/TP bracket
+at entry. The entry signal then comes from the ML sidecar instead of an indicator rule. Any other
+strategy rejects an `mlPolicyId`.
 
 **Flow.** On each closed candle the monitor selects enabled bots for that symbol/interval, asks
 `TradeBotSignalService` for a signal, and acts:
@@ -348,11 +349,13 @@ erDiagram
 ```
 
 - **`ml_policies`** — a reusable config: symbol/interval + all PPO/risk hyperparameters
-  (`totalTimesteps`, `initialBalance`, `quantity`, `takeProfit`, `stopLoss`, `breakeven`,
-  `breakevenStop`, `fee`, `slippage`, `dailyProfit`, `dailyDrawdownLimit`, `maxCandlesPerTrade`,
-  `maxTrailingDrawdown`) plus optional [tuning parameters](#optional-tuning-parameters). Live trade
-  bots and backtests running the ML Policy strategy reference a policy by id (`mlPolicyId`); the
-  policy id is also the model identifier sent to the sidecar.
+  (`totalTimesteps`, `initialBalance`, `quantity`, `breakeven`, `breakevenStop`, `fee`, `slippage`,
+  `dailyProfit`, `dailyDrawdownLimit`, `maxCandlesPerTrade`) plus optional
+  [tuning parameters](#optional-tuning-parameters). `breakeven`/`breakevenStop` are ATR multipliers
+  (see below); the stop-loss/take-profit brackets are chosen by the model at entry, so there are no
+  `stopLoss`/`takeProfit`/`maxTrailingDrawdown` policy fields. Live trade bots and backtests running
+  the ML Policy strategy reference a policy by id (`mlPolicyId`); the policy id is also the model
+  identifier sent to the sidecar.
 - **`ml_training_runs`** — one execution of a policy over a date range (model/symbol/interval/params
   come from the policy); holds only run-specific state: dates, status, and final metrics. Metrics are
   recorded both **in-sample** (`finalBalance`, `pnlPct`) and **out-of-sample** (`finalBalanceOos`,
@@ -430,10 +433,14 @@ own default, so existing policies are unaffected.
 | PPO | `learningRate` (0.0003), `nSteps` (2048, fresh only), `batchSize` (64, fresh only), `nEpochs` (10), `gamma` (0.99), `gaeLambda` (0.95), `clipRange` (0.2), `entCoef` (0.01) |
 | OOS eval | `oosEvalEvery` (1 — higher = faster training) |
 
-Risk hyperparameters are **absolute amounts**, consistent with backtests — not fractions.
-`stopLoss`/`takeProfit`/`breakeven`/`breakevenStop` are price offsets from entry, `fee` is a flat
-cash fee per round-trip, `slippage` is a flat price offset per fill, and `maxTrailingDrawdown` is a
-cash drawdown from peak balance.
+Cash risk hyperparameters are **absolute amounts**, consistent with backtests — not fractions. `fee`
+is a flat cash fee per round-trip and `slippage` is a flat price offset per fill. `breakeven` and
+`breakevenStop` are **ATR multipliers** evaluated against the ATR at entry (e.g. `0.5`–`2.0`), not
+absolute price offsets: the breakeven trigger price is `entry ± (breakeven × ATR_at_entry)` and the
+ratcheted stop is `entry ± (breakevenStop × ATR_at_entry)`; `0` disables the breakeven ratchet. The
+stop-loss and take-profit brackets are **chosen by the model at entry** (an ATR-sized SL bracket plus
+an R-multiple TP bracket), so they are no longer policy config — the former `stopLoss`, `takeProfit`,
+and `maxTrailingDrawdown` policy fields have been removed.
 
 **Decision replay.** `WS /ws/ml/training?trainingRunId={id}` streams the run's candles (from the
 database) zipped with the model's per-candle decisions — emitting `candle` and `mlDecision` frames —

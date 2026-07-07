@@ -305,8 +305,10 @@ public sealed class TradeBotService(
     private static void ApplyPolicyRisk(TradeBot tradeBot, MlPolicy policy)
     {
         tradeBot.Quantity = policy.Quantity;
-        tradeBot.StopLoss = policy.StopLoss;
-        tradeBot.TakeProfit = policy.TakeProfit;
+        // ML policies no longer carry fixed stop-loss/take-profit brackets: the model chooses the
+        // ATR-sized SL/TP bracket at entry, so leave the bot's SL/TP unset for the ML strategy.
+        tradeBot.StopLoss = null;
+        tradeBot.TakeProfit = null;
         tradeBot.Breakeven = policy.Breakeven;
         tradeBot.BreakevenStop = policy.BreakevenStop;
         tradeBot.DailyProfitGoal = policy.DailyProfit;
