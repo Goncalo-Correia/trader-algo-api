@@ -15,4 +15,7 @@ public sealed record CreateTradeRequestDto(
     decimal?                  StopLoss,
     decimal?                  TakeProfit,
     long?                     TradingAccountId,
-    decimal                   Fee = 0);
+    decimal                   Fee = 0,
+    // ATR-at-entry for ML-policy bracket trades; persisted onto the Trade so the live breakeven
+    // ratchet can scale its offsets. Null for indicator strategies.
+    decimal?                  AtrAtEntry = null);

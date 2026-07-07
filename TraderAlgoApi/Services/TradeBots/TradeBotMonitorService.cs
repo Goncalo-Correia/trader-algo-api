@@ -71,7 +71,7 @@ public sealed class TradeBotMonitorService(
                 .ToListAsync(cancellationToken);
 
             foreach (var tradeBot in tradeBots)
-                await EvaluateTradeBotAsync(dbContext, tradeBot, candle.OpenTime, signalService, tradeService, cancellationToken);
+                await EvaluateTradeBotAsync(dbContext, tradeBot, candle, signalService, tradeService, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -86,11 +86,20 @@ public sealed class TradeBotMonitorService(
     private async Task EvaluateTradeBotAsync(
         ApplicationDbContext dbContext,
         Models.TradeBot tradeBot,
-        DateTimeOffset candleOpenTime,
+        ClosedCandleEvent candle,
         ITradeBotSignalService signalService,
         ITradeService tradeService,
         CancellationToken cancellationToken)
     {
+        var candleOpenTime = candle.OpenTime;
+
+        // ML bracket trades run an ATR-scaled breakeven ratchet on every closed candle while a
+        // position is open (indicator strategies have no live ratchet). This only tightens the stop;
+        // the tick-driven TradeMonitorService then enforces it. Runs before the signal check, which
+        // returns None while a trade is open (ML is entry-only), so the two never conflict.
+        if ((TradingStrategy)tradeBot.TradingStrategyId == TradingStrategy.MlPolicy)
+            await MaybeRatchetMlBreakevenAsync(dbContext, tradeBot, candle, cancellationToken);
+
         var signal = await signalService.EvaluateAsync(tradeBot, cancellationToken);
         if (signal.Signal == TradeBotSignal.None)
         {
@@ -164,6 +173,22 @@ public sealed class TradeBotMonitorService(
             return;
         }
 
+        // ML entries size the stop/take-profit from the policy's bracket decision and the ATR-at-entry
+        // (stop = slAtrMult × ATR, TP = tpRMult × stop), capturing the ATR so the breakeven ratchet can
+        // scale off it. Indicator strategies keep their fixed bot-level SL/TP. Live fills use the real
+        // market price, so no synthetic slippage is applied here (unlike the backtest env model).
+        var stopLoss = tradeBot.StopLoss;
+        var takeProfit = tradeBot.TakeProfit;
+        decimal? atrAtEntry = null;
+        if (signal.Bracket is MlBracket bracket)
+        {
+            var (slDistance, tpDistance) = BacktestSimulationEngine.MlBracketDistances(
+                bracket.AtrAtEntry, bracket.SlAtrMult, bracket.TpRMult);
+            stopLoss = slDistance;
+            takeProfit = tpDistance;
+            atrAtEntry = bracket.AtrAtEntry;
+        }
+
         try
         {
             await tradeService.CreateAsync(
@@ -174,10 +199,11 @@ public sealed class TradeBotMonitorService(
                     OrderType: TradeOrderType.Market,
                     Quantity: tradeBot.Quantity,
                     LimitPrice: null,
-                    StopLoss: tradeBot.StopLoss,
-                    TakeProfit: tradeBot.TakeProfit,
+                    StopLoss: stopLoss,
+                    TakeProfit: takeProfit,
                     TradingAccountId: tradeBot.TradingAccountId!.Value,
-                    Fee: tradeBot.Fee),
+                    Fee: tradeBot.Fee,
+                    AtrAtEntry: atrAtEntry),
                 cancellationToken);
 
             logger.LogInformation(
@@ -203,6 +229,43 @@ public sealed class TradeBotMonitorService(
                 tradeBot.Id,
                 tradeBot.TradingAccountId);
         }
+    }
+
+    /// <summary>
+    /// Arms/ratchets the ATR-scaled breakeven stop for the account's open ML trade against the just
+    /// closed candle, mirroring the backtest engine's TryArmMlBreakeven. No-op when breakeven is
+    /// disabled, no ML trade is open, or the trade predates ATR-at-entry capture. Only ever tightens
+    /// the stop, so it is safe to run every candle without tracking an armed flag.
+    /// </summary>
+    private async Task MaybeRatchetMlBreakevenAsync(
+        ApplicationDbContext dbContext,
+        Models.TradeBot tradeBot,
+        ClosedCandleEvent candle,
+        CancellationToken cancellationToken)
+    {
+        if (tradeBot.Breakeven is not decimal breakeven || breakeven <= 0m)
+            return;
+
+        var openTrade = await dbContext.Trades
+            .Where(t => t.BacktestId == null &&
+                        t.TradingAccountId == tradeBot.TradingAccountId &&
+                        t.StatusId == (int)TradeStatus.Active)
+            .OrderByDescending(t => t.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (openTrade?.EntryPrice is null || openTrade.StopLoss is null || openTrade.AtrAtEntry is null)
+            return;
+
+        var armed = BacktestSimulationEngine.TryArmMlBreakeven(
+            openTrade, candle.High, candle.Low, breakeven, tradeBot.BreakevenStop ?? 0m);
+
+        if (!armed)
+            return;
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+        logger.LogInformation(
+            "Tradebot {TradeBotId} ratcheted ML breakeven on trade {TradeId}: stop offset now {StopLoss}",
+            tradeBot.Id, openTrade.Id, openTrade.StopLoss);
     }
 
     /// <summary>

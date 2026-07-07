@@ -176,8 +176,13 @@ public sealed class BacktestStreamService(
     {
         var bot = backtest.TradeBot!;
         var rule = SelectRule(bot.TradingStrategyId);
-        if ((TradingStrategy)bot.TradingStrategyId == TradingStrategy.MlPolicy && bot.MlPolicy is null)
+        var isMl = (TradingStrategy)bot.TradingStrategyId == TradingStrategy.MlPolicy;
+        if (isMl && bot.MlPolicy is null)
             throw new InvalidOperationException($"Backtest {backtest.Id} uses ML Policy but its tradebot has no linked ML policy.");
+
+        // ML bracket trades model a flat per-fill slippage (env parity). Indicator strategies do not
+        // apply slippage in the backtest, so this stays 0 for them.
+        var slippage = isMl ? bot.MlPolicy!.Slippage : 0m;
 
         var rangeCandles = await LoadRangeCandlesAsync(dbContext, backtest, bot.IsNySessionOnly, cancellationToken);
 
@@ -261,13 +266,25 @@ public sealed class BacktestStreamService(
             if (openTrade is not null)
                 openTradeCandles++;
 
-            // Check SL/TP on any open trade before evaluating signals.
+            // ML brackets arm the breakeven ratchet BEFORE the stop/TP check (env ordering), so an
+            // arming candle whose range also reaches the ratcheted stop can close on the same bar.
+            if (openTrade is not null && isMl && bot.Breakeven.HasValue)
+            {
+                BacktestSimulationEngine.TryArmMlBreakeven(
+                    openTrade, current.High, current.Low, bot.Breakeven.Value, bot.BreakevenStop ?? 0m);
+            }
+
+            // Check SL/TP on any open trade before evaluating signals. ML trades fill the exit at the
+            // trigger price ∓ slippage; indicator trades close at the exact trigger price.
             if (openTrade is not null)
             {
                 var (closeReason, closePrice) = BacktestSimulationEngine.CheckSlTp(openTrade, current);
                 if (closeReason.HasValue)
                 {
-                    BacktestSimulationEngine.CloseTrade(openTrade, closePrice!.Value, closeReason.Value, current.OpenTime, ref balance);
+                    if (isMl)
+                        BacktestSimulationEngine.CloseMlTrade(openTrade, closePrice!.Value, closeReason.Value, slippage, current.OpenTime, ref balance);
+                    else
+                        BacktestSimulationEngine.CloseTrade(openTrade, closePrice!.Value, closeReason.Value, current.OpenTime, ref balance);
                     await dbContext.SaveChangesAsync(cancellationToken);
 
                     ApplyDailyStat(dailyStats, openTrade);
@@ -283,7 +300,10 @@ public sealed class BacktestStreamService(
                 bot.MaxCandlesPerTrade.HasValue &&
                 openTradeCandles >= bot.MaxCandlesPerTrade.Value)
             {
-                BacktestSimulationEngine.CloseTrade(openTrade, current.Close, TradeCloseReason.Manual, current.OpenTime, ref balance);
+                if (isMl)
+                    BacktestSimulationEngine.CloseMlTrade(openTrade, current.Close, TradeCloseReason.Manual, slippage, current.OpenTime, ref balance);
+                else
+                    BacktestSimulationEngine.CloseTrade(openTrade, current.Close, TradeCloseReason.Manual, current.OpenTime, ref balance);
                 await dbContext.SaveChangesAsync(cancellationToken);
 
                 ApplyDailyStat(dailyStats, openTrade);
@@ -293,8 +313,9 @@ public sealed class BacktestStreamService(
                 openTradeCandles = 0;
             }
 
-            // Check breakeven trigger on the surviving open trade.
-            if (openTrade is not null && bot.Breakeven.HasValue && openTrade.StopLoss != 0)
+            // Indicator strategies: check the dollar-threshold breakeven AFTER SL/TP (unchanged
+            // legacy ordering). ML brackets handle breakeven above via the ATR-scaled ratchet.
+            if (!isMl && openTrade is not null && bot.Breakeven.HasValue && openTrade.StopLoss != 0)
             {
                 var breakevenTriggered = BacktestSimulationEngine.CheckBreakeven(openTrade, current, bot.Breakeven.Value);
                 if (breakevenTriggered)
@@ -308,6 +329,7 @@ public sealed class BacktestStreamService(
             if (openTrade is null && BacktestSimulationEngine.CanEnterToday(bot, current.OpenTime, dailyStats))
             {
                 TradeSide? side = null;
+                decimal slAtrMult = 0m, tpRMult = 0m;
 
                 if (rule is not null)
                 {
@@ -318,8 +340,8 @@ public sealed class BacktestStreamService(
                 }
                 else
                 {
-                    // MlPolicy: ask the sidecar for a decision
-                    side = await DecideViaMlAsync(
+                    // MlPolicy: ask the sidecar for a bracketed decision (direction + SL/TP multipliers).
+                    var decision = await DecideViaMlAsync(
                         backtest,
                         bot,
                         context,
@@ -330,10 +352,39 @@ public sealed class BacktestStreamService(
                         lastClosedCandleIndex,
                         i,
                         cancellationToken);
+
+                    if (decision is not null)
+                    {
+                        side = decision.Side;
+                        slAtrMult = decision.SlAtrMult;
+                        tpRMult = decision.TpRMult;
+                    }
                 }
 
                 if (side.HasValue)
                 {
+                    decimal entryPrice;
+                    decimal? stopLoss, takeProfit, atrAtEntry;
+
+                    if (isMl)
+                    {
+                        // Size the bracket from ATR-at-entry: stop = slAtrMult × ATR, TP = tpRMult × stop.
+                        // Entry fills at close ± slippage, matching the env.
+                        var atr = BacktestSimulationEngine.AtrAtEntryOrFallback(current.Atr?.AtrValue);
+                        var (slDistance, tpDistance) = BacktestSimulationEngine.MlBracketDistances(atr, slAtrMult, tpRMult);
+                        atrAtEntry = atr;
+                        stopLoss   = slDistance;
+                        takeProfit = tpDistance;
+                        entryPrice = BacktestSimulationEngine.MlEntryFillPrice(current.Close, side.Value, slippage);
+                    }
+                    else
+                    {
+                        atrAtEntry = null;
+                        stopLoss   = bot.StopLoss;
+                        takeProfit = bot.TakeProfit;
+                        entryPrice = current.Close;
+                    }
+
                     openTrade = new Trade
                     {
                         SymbolId         = backtest.SymbolId,
@@ -341,9 +392,10 @@ public sealed class BacktestStreamService(
                         SideId           = (int)side.Value,
                         OrderTypeId      = (int)TradeOrderType.Market,
                         Quantity         = bot.Quantity,
-                        EntryPrice       = current.Close,
-                        StopLoss         = bot.StopLoss,
-                        TakeProfit       = bot.TakeProfit,
+                        EntryPrice       = entryPrice,
+                        StopLoss         = stopLoss,
+                        TakeProfit       = takeProfit,
+                        AtrAtEntry       = atrAtEntry,
                         StatusId         = (int)TradeStatus.Active,
                         CreatedAt        = current.OpenTime,
                         OpenedAt         = current.OpenTime,
@@ -371,11 +423,14 @@ public sealed class BacktestStreamService(
             }
         }
 
-        // Force-close any open trade at the final candle's close price.
+        // Force-close any open trade at the final candle's close price (ML applies exit slippage).
         if (openTrade is not null && rangeCandles.Count > 0)
         {
             var last = rangeCandles[^1];
-            BacktestSimulationEngine.CloseTrade(openTrade, last.Close, TradeCloseReason.Manual, last.CloseTime, ref balance);
+            if (isMl)
+                BacktestSimulationEngine.CloseMlTrade(openTrade, last.Close, TradeCloseReason.Manual, slippage, last.CloseTime, ref balance);
+            else
+                BacktestSimulationEngine.CloseTrade(openTrade, last.Close, TradeCloseReason.Manual, last.CloseTime, ref balance);
             backtest.FinalBalance = balance;
             backtest.Pnl = balance - backtest.InitialBalance;
         }
@@ -548,7 +603,10 @@ public sealed class BacktestStreamService(
                 CancellationToken.None);
     }
 
-    private async Task<TradeSide?> DecideViaMlAsync(
+    // An ML entry decision: direction plus the chosen SL/TP bracket multipliers used to size the trade.
+    private sealed record MlDecision(TradeSide Side, decimal SlAtrMult, decimal TpRMult);
+
+    private async Task<MlDecision?> DecideViaMlAsync(
         Backtest backtest,
         TradeBot bot,
         TradingRuleContext context,
@@ -621,12 +679,27 @@ public sealed class BacktestStreamService(
 
         var response = await mlConnector.DecideAsync(request, cancellationToken);
 
-        return response.Action switch
+        var side = response.Action switch
         {
-            1 => TradeSide.Buy,   // EnterLong
-            2 => TradeSide.Sell,  // EnterShort
-            _ => null             // Hold or Close
+            1 => (TradeSide?)TradeSide.Buy,   // EnterLong
+            2 => TradeSide.Sell,              // EnterShort
+            _ => null                         // Hold or Close
         };
+
+        if (side is null)
+            return null;
+
+        // The sidecar always returns both bracket multipliers on an entry; if they are somehow
+        // absent we cannot size the trade, so treat it as a hold rather than open an unbracketed one.
+        if (response.SlAtrMult is not decimal slAtrMult || response.TpRMult is not decimal tpRMult)
+        {
+            logger.LogWarning(
+                "ML policy {PolicyId} returned an entry ({Action}) without bracket multipliers; holding.",
+                bot.MlPolicy!.Id, response.ActionName);
+            return null;
+        }
+
+        return new MlDecision(side.Value, slAtrMult, tpRMult);
     }
 
     private ITradingRule? SelectRule(int strategyId) => (TradingStrategy)strategyId switch

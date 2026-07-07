@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using TraderAlgoApi.Data;
@@ -11,9 +12,11 @@ using TraderAlgoApi.Data;
 namespace TraderAlgoApi.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260707171910_AddTradeAtrAtEntry")]
+    partial class AddTradeAtrAtEntry
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -750,6 +753,10 @@ namespace TraderAlgoApi.Migrations
                     b.Property<double?>("MaxStreakBonus")
                         .HasColumnType("double precision");
 
+                    b.Property<decimal>("MaxTrailingDrawdown")
+                        .HasPrecision(28, 10)
+                        .HasColumnType("numeric(28,10)");
+
                     b.Property<int?>("NEpochs")
                         .HasColumnType("integer");
 
@@ -770,11 +777,19 @@ namespace TraderAlgoApi.Migrations
                         .HasPrecision(28, 10)
                         .HasColumnType("numeric(28,10)");
 
+                    b.Property<decimal>("StopLoss")
+                        .HasPrecision(28, 10)
+                        .HasColumnType("numeric(28,10)");
+
                     b.Property<double?>("StreakBonusCoef")
                         .HasColumnType("double precision");
 
                     b.Property<int>("SymbolId")
                         .HasColumnType("integer");
+
+                    b.Property<decimal>("TakeProfit")
+                        .HasPrecision(28, 10)
+                        .HasColumnType("numeric(28,10)");
 
                     b.Property<int>("TotalTimesteps")
                         .HasColumnType("integer");
