@@ -165,6 +165,13 @@ builder.Services.AddHttpClient("MlPolicy", client =>
     var baseUrl = builder.Configuration["MlPolicy:BaseUrl"] ?? "http://localhost:8766";
     client.BaseAddress = new Uri(baseUrl);
     client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+
+    // The ML sidecar gates every endpoint except /health behind an X-API-Key header when it is
+    // configured with an API key (required when it is publicly reachable). Send the shared secret
+    // on every call. Empty => the sidecar has auth disabled (local/private deploy), so omit it.
+    var apiKey = builder.Configuration["MlPolicy:ApiKey"];
+    if (!string.IsNullOrWhiteSpace(apiKey))
+        client.DefaultRequestHeaders.Add("X-API-Key", apiKey.Trim());
 });
 builder.Services.Configure<MlflowOptions>(builder.Configuration.GetSection("Mlflow"));
 builder.Services.AddScoped<IMlConnectorService, MlConnectorService>();
