@@ -284,8 +284,11 @@ flowchart TD
 
 Rules: only **one active trade per bot/account** (new same-direction signals are ignored while a
 position is open); an opposite-direction signal closes the current trade; enabling a bot that
-already has an active trade on its account is rejected to avoid double entry. Live trade events are
-pushed to `WS /ws/tradebots/events?tradingAccountId=`.
+already has an active trade on its account is rejected to avoid double entry. `maxCandlesPerTrade`
+is a **candle-age cap**: once an open trade has spanned that many candles the monitor force-closes it
+at market (checked before the signal, so a max-candles exit wins over a same-candle opposite signal),
+mirroring the backtest/training-env horizon so live trades don't outlive the window the strategy was
+tuned for. Live trade events are pushed to `WS /ws/tradebots/events?tradingAccountId=`.
 
 **Entry gates.** Before opening a position the bot applies the same entry gates as a backtest (shared
 `BacktestSimulationEngine.CanEnterToday` logic): `isNySessionOnly` restricts entries to the NY session,
@@ -350,7 +353,7 @@ erDiagram
 
 - **`ml_policies`** — a reusable config: symbol/interval + all PPO/risk hyperparameters
   (`totalTimesteps`, `initialBalance`, `quantity`, `breakeven`, `breakevenStop`, `fee`, `slippage`,
-  `dailyProfit`, `dailyDrawdownLimit`, `maxCandlesPerTrade`) plus optional
+  `dailyProfit`, `dailyDrawdownLimit`, `maxCandlesPerTrade`, optional `riskPerTrade`) plus optional
   [tuning parameters](#optional-tuning-parameters). `breakeven`/`breakevenStop` are ATR multipliers
   (see below); the stop-loss/take-profit brackets are chosen by the model at entry, so there are no
   `stopLoss`/`takeProfit`/`maxTrailingDrawdown` policy fields. Live trade bots and backtests running
@@ -434,13 +437,19 @@ own default, so existing policies are unaffected.
 | OOS eval | `oosEvalEvery` (1 — higher = faster training) |
 
 Cash risk hyperparameters are **absolute amounts**, consistent with backtests — not fractions. `fee`
-is a flat cash fee per round-trip and `slippage` is a flat price offset per fill. `breakeven` and
+is a flat cash fee per round-trip. `slippage` is an **ATR fraction**: the per-fill price offset is
+`slippage × ATR_at_entry` (applied on both entry and exit fills in the backtest/training env), not a
+fixed price offset. `breakeven` and
 `breakevenStop` are **ATR multipliers** evaluated against the ATR at entry (e.g. `0.5`–`2.0`), not
 absolute price offsets: the breakeven trigger price is `entry ± (breakeven × ATR_at_entry)` and the
 ratcheted stop is `entry ± (breakevenStop × ATR_at_entry)`; `0` disables the breakeven ratchet. The
 stop-loss and take-profit brackets are **chosen by the model at entry** (an ATR-sized SL bracket plus
 an R-multiple TP bracket), so they are no longer policy config — the former `stopLoss`, `takeProfit`,
-and `maxTrailingDrawdown` policy fields have been removed.
+and `maxTrailingDrawdown` policy fields have been removed. `riskPerTrade` is an optional absolute cash
+amount for **volatility-targeted sizing**: when set (`> 0`) the position size is
+`riskPerTrade / stop_distance` (where `stop_distance = sl_atr_mult × ATR_at_entry`, the model-chosen
+SL bracket); when null or `≤ 0` the fixed `quantity` is used instead. It is omitted from the `/train`
+request when null so the sidecar falls back to the fixed quantity.
 
 **Decision replay.** `WS /ws/ml/training?trainingRunId={id}` streams the run's candles (from the
 database) zipped with the model's per-candle decisions — emitting `candle` and `mlDecision` frames —

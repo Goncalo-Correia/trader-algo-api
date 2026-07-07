@@ -100,6 +100,15 @@ public sealed class TradeBotMonitorService(
         if ((TradingStrategy)tradeBot.TradingStrategyId == TradingStrategy.MlPolicy)
             await MaybeRatchetMlBreakevenAsync(dbContext, tradeBot, candle, cancellationToken);
 
+        // Enforce the per-trade candle-age cap that the backtest and the ML training env both apply:
+        // once an open trade has spanned maxCandlesPerTrade candles, force-close it at market so live
+        // execution matches training/backtest (mirrors BacktestSimulationEngine's openTradeCandles
+        // cap). Runs before the signal check so, like the backtest, a max-candles exit wins over a
+        // same-candle opposite signal. Applies to every strategy. If SL/TP fired intra-candle the
+        // trade is already Closed, so this is a no-op and never double-closes.
+        if (await MaybeForceCloseMaxCandlesAsync(dbContext, tradeBot, candle, tradeService, cancellationToken))
+            return;
+
         var signal = await signalService.EvaluateAsync(tradeBot, cancellationToken);
         if (signal.Signal == TradeBotSignal.None)
         {
@@ -270,6 +279,62 @@ public sealed class TradeBotMonitorService(
         logger.LogInformation(
             "Tradebot {TradeBotId} ratcheted ML breakeven on trade {TradeId}: stop offset now {StopLoss}",
             tradeBot.Id, openTrade.Id, openTrade.StopLoss);
+    }
+
+    /// <summary>
+    /// Force-closes the account's open trade once it has spanned <c>MaxCandlesPerTrade</c> candles,
+    /// mirroring the backtest/training-env candle-age cap so live trades don't outlive the horizon the
+    /// model/strategy was tuned for. Returns true when it closed a trade (the caller then skips signal
+    /// evaluation for this candle). No-op when the cap is unset/≤ 0 or no active trade is open. Candle
+    /// age uses the same "candles since an event" convention as the rest of the live path
+    /// (<see cref="CountCandlesSinceLastTradeClosedAsync"/>): candles whose open-time is after the
+    /// trade's OpenedAt, which lines up with the backtest's per-trade candle counter.
+    /// </summary>
+    private async Task<bool> MaybeForceCloseMaxCandlesAsync(
+        ApplicationDbContext dbContext,
+        Models.TradeBot tradeBot,
+        ClosedCandleEvent candle,
+        ITradeService tradeService,
+        CancellationToken cancellationToken)
+    {
+        if (tradeBot.MaxCandlesPerTrade is not int maxCandles || maxCandles <= 0)
+            return false;
+
+        var openTrade = await dbContext.Trades
+            .Where(t => t.BacktestId == null &&
+                        t.TradingAccountId == tradeBot.TradingAccountId &&
+                        t.StatusId == (int)TradeStatus.Active)
+            .OrderByDescending(t => t.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (openTrade?.OpenedAt is not DateTimeOffset openedAt)
+            return false;
+
+        var candlesOpen = await dbContext.KlineData
+            .CountAsync(
+                k => k.SymbolId == tradeBot.SymbolId &&
+                     k.IntervalId == tradeBot.IntervalId &&
+                     k.OpenTime > openedAt &&
+                     k.OpenTime <= candle.OpenTime,
+                cancellationToken);
+
+        if (candlesOpen < maxCandles)
+            return false;
+
+        try
+        {
+            await tradeService.CloseAsync(openTrade.Id, TradeCloseReason.Manual, cancellationToken);
+        }
+        catch (InvalidOperationException)
+        {
+            // The tick-driven monitor closed it (SL/TP) between our read and here — nothing to do.
+            return false;
+        }
+
+        logger.LogInformation(
+            "Tradebot {TradeBotId} force-closed trade {TradeId} for account {AccountId}: reached max candles per trade ({CandlesOpen} >= {MaxCandles})",
+            tradeBot.Id, openTrade.Id, tradeBot.TradingAccountId, candlesOpen, maxCandles);
+        return true;
     }
 
     /// <summary>

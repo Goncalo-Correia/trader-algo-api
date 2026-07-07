@@ -59,6 +59,15 @@ identically (entries only; exits/opposite-signal closes still run outside the se
 limit). The two session implementations are not equivalent (holidays); reconcile them rather than
 adding a third if you touch this.
 
+**`maxCandlesPerTrade` is a per-trade candle-age exit enforced in both modes.** The backtest
+(`BacktestStreamService`, via `BacktestSimulationEngine`'s `openTradeCandles` counter) and the live
+`TradeBotMonitorService` (`MaybeForceCloseMaxCandlesAsync`) both force-close an open trade at market
+once it has spanned that many candles, checked *before* the entry/opposite-signal evaluation so a
+max-candles exit wins over a same-candle opposite signal. It applies to every strategy (not just
+`MlPolicy`, which is trained against the same horizon in the ML env). Live counts candle age with the
+`KlineData.OpenTime > Trade.OpenedAt` convention shared with `candlesSinceLastTradeClosed`; keep the
+two modes' cap behavior in sync if you touch either.
+
 **DbContext registered twice, deliberately.** Both `AddDbContext` (scoped, for request work) and
 `AddDbContextFactory` (for long-lived WebSocket streams and background jobs that must not hold a
 request-scoped context open). In background/stream code, create a fresh context per unit of work via
