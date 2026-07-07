@@ -13,10 +13,13 @@ public sealed record MlPolicyRequest(
     [property: JsonPropertyName("breakeven")]           decimal Breakeven,
     [property: JsonPropertyName("breakevenStop")]       decimal BreakevenStop,
     [property: JsonPropertyName("fee")]                 decimal Fee,
+    // slippage is an ATR fraction (offset = slippage × ATR-at-entry per fill), not a fixed offset.
     [property: JsonPropertyName("slippage")]            decimal Slippage,
     [property: JsonPropertyName("dailyProfit")]         decimal DailyProfit,
     [property: JsonPropertyName("dailyDrawdownLimit")]  decimal DailyDrawdownLimit,
     [property: JsonPropertyName("maxCandlesPerTrade")]  int MaxCandlesPerTrade,
+    // Optional cash risked at the stop for volatility-targeted ML sizing. Null/≤ 0 = fixed quantity.
+    [property: JsonPropertyName("riskPerTrade")]        decimal? RiskPerTrade = null,
     // Optional ML tuning parameters (§3). Null = use the ML service default.
     [property: JsonPropertyName("episodeDays")]             double? EpisodeDays = null,
     [property: JsonPropertyName("entryCost")]               double? EntryCost = null,
@@ -50,6 +53,7 @@ public sealed record MlPolicyResponse(
     [property: JsonPropertyName("dailyProfit")]         decimal DailyProfit,
     [property: JsonPropertyName("dailyDrawdownLimit")]  decimal DailyDrawdownLimit,
     [property: JsonPropertyName("maxCandlesPerTrade")]  int MaxCandlesPerTrade,
+    [property: JsonPropertyName("riskPerTrade")]        decimal? RiskPerTrade,
     [property: JsonPropertyName("episodeDays")]             double? EpisodeDays,
     [property: JsonPropertyName("entryCost")]               double? EntryCost,
     [property: JsonPropertyName("noTradeDayPenalty")]       double? NoTradeDayPenalty,

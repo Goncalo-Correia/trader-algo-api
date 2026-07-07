@@ -180,9 +180,10 @@ public sealed class BacktestStreamService(
         if (isMl && bot.MlPolicy is null)
             throw new InvalidOperationException($"Backtest {backtest.Id} uses ML Policy but its tradebot has no linked ML policy.");
 
-        // ML bracket trades model a flat per-fill slippage (env parity). Indicator strategies do not
-        // apply slippage in the backtest, so this stays 0 for them.
-        var slippage = isMl ? bot.MlPolicy!.Slippage : 0m;
+        // ML bracket trades model per-fill slippage as an ATR fraction (env parity): the price offset
+        // on each fill is slippageRate × ATR-at-entry. Indicator strategies apply no slippage in the
+        // backtest, so this rate stays 0 for them.
+        var slippageRate = isMl ? bot.MlPolicy!.Slippage : 0m;
 
         var rangeCandles = await LoadRangeCandlesAsync(dbContext, backtest, bot.IsNySessionOnly, cancellationToken);
 
@@ -282,7 +283,7 @@ public sealed class BacktestStreamService(
                 if (closeReason.HasValue)
                 {
                     if (isMl)
-                        BacktestSimulationEngine.CloseMlTrade(openTrade, closePrice!.Value, closeReason.Value, slippage, current.OpenTime, ref balance);
+                        BacktestSimulationEngine.CloseMlTrade(openTrade, closePrice!.Value, closeReason.Value, slippageRate, current.OpenTime, ref balance);
                     else
                         BacktestSimulationEngine.CloseTrade(openTrade, closePrice!.Value, closeReason.Value, current.OpenTime, ref balance);
                     await dbContext.SaveChangesAsync(cancellationToken);
@@ -301,7 +302,7 @@ public sealed class BacktestStreamService(
                 openTradeCandles >= bot.MaxCandlesPerTrade.Value)
             {
                 if (isMl)
-                    BacktestSimulationEngine.CloseMlTrade(openTrade, current.Close, TradeCloseReason.Manual, slippage, current.OpenTime, ref balance);
+                    BacktestSimulationEngine.CloseMlTrade(openTrade, current.Close, TradeCloseReason.Manual, slippageRate, current.OpenTime, ref balance);
                 else
                     BacktestSimulationEngine.CloseTrade(openTrade, current.Close, TradeCloseReason.Manual, current.OpenTime, ref balance);
                 await dbContext.SaveChangesAsync(cancellationToken);
@@ -364,24 +365,28 @@ public sealed class BacktestStreamService(
                 if (side.HasValue)
                 {
                     decimal entryPrice;
+                    decimal quantity;
                     decimal? stopLoss, takeProfit, atrAtEntry;
 
                     if (isMl)
                     {
                         // Size the bracket from ATR-at-entry: stop = slAtrMult × ATR, TP = tpRMult × stop.
-                        // Entry fills at close ± slippage, matching the env.
+                        // Entry fills at close ± (slippageRate × ATR-at-entry), matching the env.
                         var atr = BacktestSimulationEngine.AtrAtEntryOrFallback(current.Atr?.AtrValue);
                         var (slDistance, tpDistance) = BacktestSimulationEngine.MlBracketDistances(atr, slAtrMult, tpRMult);
                         atrAtEntry = atr;
                         stopLoss   = slDistance;
                         takeProfit = tpDistance;
-                        entryPrice = BacktestSimulationEngine.MlEntryFillPrice(current.Close, side.Value, slippage);
+                        // Volatility-targeted sizing when the policy sets risk-per-trade; else fixed quantity.
+                        quantity   = BacktestSimulationEngine.MlPositionSize(bot.Quantity, bot.MlPolicy!.RiskPerTrade, slDistance);
+                        entryPrice = BacktestSimulationEngine.MlEntryFillPrice(current.Close, side.Value, slippageRate, atr);
                     }
                     else
                     {
                         atrAtEntry = null;
                         stopLoss   = bot.StopLoss;
                         takeProfit = bot.TakeProfit;
+                        quantity   = bot.Quantity;
                         entryPrice = current.Close;
                     }
 
@@ -391,7 +396,7 @@ public sealed class BacktestStreamService(
                         IntervalId       = backtest.IntervalId,
                         SideId           = (int)side.Value,
                         OrderTypeId      = (int)TradeOrderType.Market,
-                        Quantity         = bot.Quantity,
+                        Quantity         = quantity,
                         EntryPrice       = entryPrice,
                         StopLoss         = stopLoss,
                         TakeProfit       = takeProfit,
@@ -428,7 +433,7 @@ public sealed class BacktestStreamService(
         {
             var last = rangeCandles[^1];
             if (isMl)
-                BacktestSimulationEngine.CloseMlTrade(openTrade, last.Close, TradeCloseReason.Manual, slippage, last.CloseTime, ref balance);
+                BacktestSimulationEngine.CloseMlTrade(openTrade, last.Close, TradeCloseReason.Manual, slippageRate, last.CloseTime, ref balance);
             else
                 BacktestSimulationEngine.CloseTrade(openTrade, last.Close, TradeCloseReason.Manual, last.CloseTime, ref balance);
             backtest.FinalBalance = balance;

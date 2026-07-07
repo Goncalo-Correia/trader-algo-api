@@ -478,6 +478,7 @@ public sealed class MlController(
             DailyDrawdownLimit:            policy.DailyDrawdownLimit,
             FeeRate:                       policy.Fee,
             SlippageRate:                  policy.Slippage,
+            RiskPerTrade:                  policy.RiskPerTrade,
             EpisodeDays:                   policy.EpisodeDays,
             EntryCost:                     policy.EntryCost,
             NoTradeDayPenalty:             policy.NoTradeDayPenalty,

@@ -125,8 +125,8 @@ public static class BacktestSimulationEngine
     // The MlPolicy strategy sizes its stop/take-profit per trade from the sidecar's bracket
     // decision and an ATR-at-entry, and runs an ATR-scaled breakeven ratchet. These helpers
     // mirror trader-algo-ml's TradingEnv (app/env/trading_env.py) exactly — stop fills before
-    // TP on a spanning candle, entry/exit fills at price ± slippage, one flat fee per round-trip
-    // — and are kept separate from the indicator-strategy path (shared CheckBreakeven above is
+    // TP on a spanning candle, entry/exit fills at price ± (slippageRate × ATR-at-entry), one flat
+    // fee per round-trip — and are kept separate from the indicator-strategy path (shared CheckBreakeven above is
     // untouched). Stop/take-profit are stored on the Trade as positive unit offsets from the fill
     // price, so CheckSlTp/CloseTrade are reused for the trigger geometry; only the fill prices and
     // the breakeven trigger differ.
@@ -146,9 +146,27 @@ public static class BacktestSimulationEngine
         return (stopDistance, tpRMult * stopDistance);
     }
 
-    /// <summary>Entry fills at candle close ± slippage (long +, short −), matching the env's _open_position.</summary>
-    public static decimal MlEntryFillPrice(decimal closePrice, TradeSide side, decimal slippage) =>
-        side == TradeSide.Buy ? closePrice + slippage : closePrice - slippage;
+    /// <summary>
+    /// ML position size. When <paramref name="riskPerTrade"/> is set (&gt; 0), size volatility-targeted:
+    /// quantity = riskPerTrade / stopDistance (the cash risked at the model-chosen SL bracket, where
+    /// stopDistance = slAtrMult × ATR-at-entry). Otherwise fall back to <paramref name="fallbackQuantity"/>.
+    /// A non-positive stop distance (indicator warmup) also falls back so a size can always be produced.
+    /// ML-specific — the indicator strategies never call this.
+    /// </summary>
+    public static decimal MlPositionSize(decimal fallbackQuantity, decimal? riskPerTrade, decimal stopDistance) =>
+        riskPerTrade is decimal risk && risk > 0m && stopDistance > 0m
+            ? risk / stopDistance
+            : fallbackQuantity;
+
+    /// <summary>
+    /// Entry fills at candle close ± (slippageRate × ATR-at-entry) (long +, short −), matching the env's
+    /// _open_position. slippageRate is an ATR fraction, not a fixed price offset.
+    /// </summary>
+    public static decimal MlEntryFillPrice(decimal closePrice, TradeSide side, decimal slippageRate, decimal atrAtEntry)
+    {
+        var slippage = slippageRate * atrAtEntry;
+        return side == TradeSide.Buy ? closePrice + slippage : closePrice - slippage;
+    }
 
     /// <summary>
     /// ATR-scaled breakeven ratchet for an open ML trade, mirroring the env's
@@ -185,16 +203,19 @@ public static class BacktestSimulationEngine
 
     /// <summary>
     /// Closes an ML trade at a bracket trigger (or forced) price, applying exit slippage
-    /// (long −, short +) to the fill before the flat fee, matching the env's _close_position.
+    /// (long −, short +) to the fill before the flat fee, matching the env's _close_position. The
+    /// slippage offset is <paramref name="slippageRate"/> × the trade's own ATR-at-entry (an ATR
+    /// fraction), so entry and exit fills scale off the same ATR the bracket used.
     /// </summary>
     public static decimal CloseMlTrade(
         Trade trade,
         decimal triggerPrice,
         TradeCloseReason reason,
-        decimal slippage,
+        decimal slippageRate,
         DateTimeOffset time,
         ref decimal balance)
     {
+        var slippage = slippageRate * AtrAtEntryOrFallback(trade.AtrAtEntry);
         var exitPrice = trade.SideId == (int)TradeSide.Buy
             ? triggerPrice - slippage
             : triggerPrice + slippage;

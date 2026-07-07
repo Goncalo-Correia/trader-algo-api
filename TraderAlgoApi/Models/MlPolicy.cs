@@ -55,8 +55,20 @@ public sealed class MlPolicy
     [Precision(28, 10)]
     public decimal Fee { get; set; }
 
+    /// <summary>
+    /// Per-fill slippage as an <b>ATR fraction</b>: the ML backtest/env applies a price offset of
+    /// Slippage × ATR-at-entry on each entry and exit fill (not a fixed price offset).
+    /// </summary>
     [Precision(28, 10)]
     public decimal Slippage { get; set; }
+
+    /// <summary>
+    /// Optional cash risked at the stop for volatility-targeted position sizing. When set (&gt; 0),
+    /// the ML position size is RiskPerTrade / stop_distance (stop_distance = sl_atr_mult ×
+    /// ATR-at-entry). Null/≤ 0 falls back to the fixed <see cref="Quantity"/>. ML-specific.
+    /// </summary>
+    [Precision(28, 10)]
+    public decimal? RiskPerTrade { get; set; }
 
     [Precision(28, 10)]
     public decimal DailyProfit { get; set; }

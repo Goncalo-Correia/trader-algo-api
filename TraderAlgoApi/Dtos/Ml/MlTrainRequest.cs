@@ -20,7 +20,14 @@ public sealed record MlTrainRequest(
     [property: JsonPropertyName("daily_profit_target")] decimal DailyProfitTarget,
     [property: JsonPropertyName("daily_drawdown_limit")] decimal DailyDrawdownLimit,
     [property: JsonPropertyName("fee_rate")] decimal FeeRate,
+    // slippage_rate is an ATR fraction: the per-fill price offset is slippage_rate × ATR-at-entry
+    // (not a fixed price offset), applied on both entry and exit fills in the sidecar env.
     [property: JsonPropertyName("slippage_rate")] decimal SlippageRate,
+
+    // Optional risk sizing (§7). Cash risked at the stop; when set (> 0) the ML position size is
+    // risk_per_trade / stop_distance (stop_distance = sl_atr_mult × ATR-at-entry), enabling
+    // volatility-targeted sizing. Omitted when null so the sidecar falls back to the fixed quantity.
+    [property: JsonPropertyName("risk_per_trade"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] decimal? RiskPerTrade = null,
 
     // Optional tuning parameters (§3). Null values are omitted so the ML service applies its
     // own defaults, preserving prior behavior.

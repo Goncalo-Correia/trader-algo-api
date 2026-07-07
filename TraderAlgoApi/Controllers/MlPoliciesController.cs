@@ -133,6 +133,7 @@ public sealed class MlPoliciesController(
         policy.DailyProfit         = r.DailyProfit;
         policy.DailyDrawdownLimit  = r.DailyDrawdownLimit;
         policy.MaxCandlesPerTrade  = r.MaxCandlesPerTrade;
+        policy.RiskPerTrade        = r.RiskPerTrade;
         policy.EpisodeDays             = r.EpisodeDays;
         policy.EntryCost               = r.EntryCost;
         policy.NoTradeDayPenalty       = r.NoTradeDayPenalty;
@@ -167,6 +168,7 @@ public sealed class MlPoliciesController(
             DailyProfit:         p.DailyProfit,
             DailyDrawdownLimit:  p.DailyDrawdownLimit,
             MaxCandlesPerTrade:  p.MaxCandlesPerTrade,
+            RiskPerTrade:        p.RiskPerTrade,
             EpisodeDays:             p.EpisodeDays,
             EntryCost:               p.EntryCost,
             NoTradeDayPenalty:       p.NoTradeDayPenalty,

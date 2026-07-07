@@ -179,6 +179,7 @@ public sealed class TradeBotMonitorService(
         // market price, so no synthetic slippage is applied here (unlike the backtest env model).
         var stopLoss = tradeBot.StopLoss;
         var takeProfit = tradeBot.TakeProfit;
+        var quantity = tradeBot.Quantity;
         decimal? atrAtEntry = null;
         if (signal.Bracket is MlBracket bracket)
         {
@@ -187,6 +188,9 @@ public sealed class TradeBotMonitorService(
             stopLoss = slDistance;
             takeProfit = tpDistance;
             atrAtEntry = bracket.AtrAtEntry;
+            // Volatility-targeted sizing when the policy sets risk-per-trade; else the fixed quantity.
+            quantity = BacktestSimulationEngine.MlPositionSize(
+                tradeBot.Quantity, tradeBot.MlPolicy?.RiskPerTrade, slDistance);
         }
 
         try
@@ -197,7 +201,7 @@ public sealed class TradeBotMonitorService(
                     IntervalCode: tradeBot.Interval.Code,
                     Side: side,
                     OrderType: TradeOrderType.Market,
-                    Quantity: tradeBot.Quantity,
+                    Quantity: quantity,
                     LimitPrice: null,
                     StopLoss: stopLoss,
                     TakeProfit: takeProfit,
