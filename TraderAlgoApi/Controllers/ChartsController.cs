@@ -77,7 +77,10 @@ public sealed class ChartsController(ApplicationDbContext dbContext) : Controlle
                 kline.RelativeStrengthIndex!.Divergence,
                 kline.Macd!.MacdLine,
                 kline.Macd!.SignalLine,
-                kline.Macd!.Histogram))
+                kline.Macd!.Histogram,
+                kline.Atr!.Period,
+                kline.Atr!.TrueRange,
+                kline.Atr!.AtrValue))
             .ToListAsync(cancellationToken);
 
         return Ok(candles);
@@ -127,7 +130,10 @@ public sealed class ChartsController(ApplicationDbContext dbContext) : Controlle
                 kline.RelativeStrengthIndex!.Divergence,
                 kline.Macd!.MacdLine,
                 kline.Macd!.SignalLine,
-                kline.Macd!.Histogram))
+                kline.Macd!.Histogram,
+                kline.Atr!.Period,
+                kline.Atr!.TrueRange,
+                kline.Atr!.AtrValue))
             .ToListAsync(cancellationToken);
 
         return Ok(candles);

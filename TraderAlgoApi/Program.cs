@@ -130,6 +130,7 @@ builder.Services.AddHostedService<TradeBotMonitorService>();
 builder.Services.AddScoped<ISimpleMovingAverageService, SimpleMovingAverageService>();
 builder.Services.AddScoped<IRsiService, RsiService>();
 builder.Services.AddScoped<IMacdService, MacdService>();
+builder.Services.AddScoped<IAtrService, AtrService>();
 builder.Services.AddScoped<IIndicatorSyncService, IndicatorSyncService>();
 
 // ── Data collection ───────────────────────────────────────────────────────────

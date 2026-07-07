@@ -62,4 +62,6 @@ public sealed class KlineData
     public RelativeStrengthIndex? RelativeStrengthIndex { get; set; }
 
     public Macd? Macd { get; set; }
+
+    public Atr? Atr { get; set; }
 }

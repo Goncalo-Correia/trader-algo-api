@@ -20,9 +20,12 @@ public sealed class LiveChartDataService(
     IDbContextFactory<ApplicationDbContext> dbContextFactory,
     ISimpleMovingAverageService smaService,
     IRsiService                rsiService,
-    IMacdService               macdService) : ILiveChartDataService
+    IMacdService               macdService,
+    IAtrService                atrService) : ILiveChartDataService
 {
     private const int WindowSize = 200;
+    // Wilder's ATR averaging period; mirrors the value persisted by IndicatorSyncService.
+    private const int AtrDefaultPeriod = 14;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public Task StreamCandlesAsync(
@@ -57,6 +60,8 @@ public sealed class LiveChartDataService(
         string streamSymbol;
         string streamInterval;
         List<decimal>? closes = null;
+        List<decimal>? highs = null;
+        List<decimal>? lows = null;
 
         // Use a short-lived context only for the up-front reads, then release it before the
         // (potentially very long) streaming loop — which talks only to the in-memory feeds.
@@ -82,13 +87,13 @@ public sealed class LiveChartDataService(
             streamInterval = resolvedInterval;
 
             if (withIndicators)
-                closes = await LoadRecentClosesAsync(dbContext, streamSymbol, streamInterval, WindowSize, cancellationToken);
+                (highs, lows, closes) = await LoadRecentOhlcAsync(dbContext, streamSymbol, streamInterval, WindowSize, cancellationToken);
         }
 
         using var clientSocket = await context.WebSockets.AcceptWebSocketAsync();
 
         await StreamFromFeedsAsync(
-            clientSocket, streamSymbol, streamInterval, withIndicators, closes, cancellationToken);
+            clientSocket, streamSymbol, streamInterval, withIndicators, highs, lows, closes, cancellationToken);
     }
 
     // ── Core streaming loop ───────────────────────────────────────────────────
@@ -98,6 +103,8 @@ public sealed class LiveChartDataService(
         string            symbol,
         string            intervalCode,
         bool              withIndicators,
+        List<decimal>?    highs,
+        List<decimal>?    lows,
         List<decimal>?    closes,
         CancellationToken ct)
     {
@@ -108,15 +115,21 @@ public sealed class LiveChartDataService(
             aggregator.OnTick(symbol, intervalCode, price, DateTimeOffset.UtcNow);
         }
 
-        // Subscribe to closed candles to keep the rolling close window current.
+        // Subscribe to closed candles to keep the rolling OHLC windows current.
         void OnClosed(ClosedCandleEvent e)
         {
             if (e.Symbol != symbol || e.Interval != intervalCode) return;
-            if (withIndicators && closes is not null)
+            if (withIndicators && closes is not null && highs is not null && lows is not null)
             {
                 closes.Add(e.Close);
+                highs.Add(e.High);
+                lows.Add(e.Low);
                 if (closes.Count > WindowSize)
+                {
                     closes.RemoveAt(0);
+                    highs.RemoveAt(0);
+                    lows.RemoveAt(0);
+                }
             }
         }
 
@@ -138,7 +151,7 @@ public sealed class LiveChartDataService(
 
                 byte[] payload;
 
-                if (withIndicators && closes is not null && closes.Count > 0)
+                if (withIndicators && closes is not null && highs is not null && lows is not null && closes.Count > 0)
                 {
                     var lastIdx  = closes.Count - 1;
                     var (sma20, sma100)              = smaService.Compute(closes, lastIdx);
@@ -148,6 +161,8 @@ public sealed class LiveChartDataService(
                     var divergence                    = rsiService.DetectDivergence(closes, rsiValues, lastIdx);
                     var macdValues                    = macdService.ComputeAll(closes);
                     var (macdLine, signalLine, histogram) = macdValues[lastIdx];
+                    var atrValues                     = atrService.ComputeAll(highs, lows, closes);
+                    var (trueRange, atr)              = atrValues[lastIdx];
 
                     payload = JsonSerializer.SerializeToUtf8Bytes(
                         new CandleWithIndicatorsResponseDto(
@@ -158,7 +173,8 @@ public sealed class LiveChartDataService(
                             TakerSellBaseAssetVolume: 0m,
                             sma20, sma100,
                             rsi, rsiSmooth, divergence,
-                            macdLine, signalLine, histogram),
+                            macdLine, signalLine, histogram,
+                            AtrDefaultPeriod, trueRange, atr),
                         JsonOptions);
                 }
                 else
@@ -214,19 +230,22 @@ public sealed class LiveChartDataService(
         return (s, i, valid);
     }
 
-    private static async Task<List<decimal>> LoadRecentClosesAsync(
+    private static async Task<(List<decimal> Highs, List<decimal> Lows, List<decimal> Closes)> LoadRecentOhlcAsync(
         ApplicationDbContext dbContext, string symbol, string intervalCode, int count, CancellationToken ct)
     {
-        var closes = await dbContext.KlineData
+        var candles = await dbContext.KlineData
             .AsNoTracking()
             .Where(k => k.Symbol.Code   == symbol
                      && k.Interval.Code == intervalCode)
             .OrderByDescending(k => k.OpenTime)
             .Take(count)
             .OrderBy(k => k.OpenTime)
-            .Select(k => k.Close)
+            .Select(k => new { k.High, k.Low, k.Close })
             .ToListAsync(ct);
 
-        return closes;
+        return (
+            candles.Select(c => c.High).ToList(),
+            candles.Select(c => c.Low).ToList(),
+            candles.Select(c => c.Close).ToList());
     }
 }

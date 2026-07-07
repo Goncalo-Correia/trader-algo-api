@@ -25,4 +25,9 @@ public sealed record CandleWithIndicatorsResponseDto(
     // ── MACD ──────────────────────────────────────────────────────────────────
     [property: JsonPropertyName("macd_line")]    decimal? MacdLine,
     [property: JsonPropertyName("macd_signal_line")]  decimal? SignalLine,
-    [property: JsonPropertyName("macd_histogram")] decimal? Histogram);
+    [property: JsonPropertyName("macd_histogram")] decimal? Histogram,
+
+    // ── Average True Range ────────────────────────────────────────────────────
+    [property: JsonPropertyName("atr_period")]     int?     AtrPeriod,
+    [property: JsonPropertyName("atr_true_range")] decimal? AtrTrueRange,
+    [property: JsonPropertyName("atr")]            decimal? Atr);
