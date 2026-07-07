@@ -121,6 +121,86 @@ public static class BacktestSimulationEngine
         return trade.Pnl.Value;
     }
 
+    // ── ML bracket execution ───────────────────────────────────────────────────────
+    // The MlPolicy strategy sizes its stop/take-profit per trade from the sidecar's bracket
+    // decision and an ATR-at-entry, and runs an ATR-scaled breakeven ratchet. These helpers
+    // mirror trader-algo-ml's TradingEnv (app/env/trading_env.py) exactly — stop fills before
+    // TP on a spanning candle, entry/exit fills at price ± slippage, one flat fee per round-trip
+    // — and are kept separate from the indicator-strategy path (shared CheckBreakeven above is
+    // untouched). Stop/take-profit are stored on the Trade as positive unit offsets from the fill
+    // price, so CheckSlTp/CloseTrade are reused for the trigger geometry; only the fill prices and
+    // the breakeven trigger differ.
+
+    /// <summary>
+    /// ATR (Wilder, period 14) used to size the ML brackets. Mirrors the env's guard: a missing or
+    /// non-positive ATR (indicator warmup) falls back to 1 so a bracket can always be sized.
+    /// </summary>
+    public static decimal AtrAtEntryOrFallback(decimal? atrValue) =>
+        atrValue is decimal a && a > 0m ? a : 1m;
+
+    /// <summary>Stop distance = slAtrMult × ATR-at-entry; take-profit distance = tpRMult × stop distance.</summary>
+    public static (decimal StopDistance, decimal TakeProfitDistance) MlBracketDistances(
+        decimal atrAtEntry, decimal slAtrMult, decimal tpRMult)
+    {
+        var stopDistance = slAtrMult * atrAtEntry;
+        return (stopDistance, tpRMult * stopDistance);
+    }
+
+    /// <summary>Entry fills at candle close ± slippage (long +, short −), matching the env's _open_position.</summary>
+    public static decimal MlEntryFillPrice(decimal closePrice, TradeSide side, decimal slippage) =>
+        side == TradeSide.Buy ? closePrice + slippage : closePrice - slippage;
+
+    /// <summary>
+    /// ATR-scaled breakeven ratchet for an open ML trade, mirroring the env's
+    /// _arm_breakeven_if_triggered. Trigger at entry ± breakeven × ATR-at-entry; once the candle's
+    /// extreme reaches it, ratchet the stop toward entry ± breakevenStop × ATR-at-entry, never
+    /// loosening it. Mutates <paramref name="trade"/>.StopLoss (a distance from entry; negative means
+    /// the stop sits beyond entry, locking in profit). No-op when breakeven is disabled (≤ 0).
+    /// Idempotent, so it is safe to call every candle without tracking an armed flag.
+    /// </summary>
+    public static bool TryArmMlBreakeven(Trade trade, decimal candleHigh, decimal candleLow, decimal breakeven, decimal breakevenStop)
+    {
+        if (breakeven <= 0m || trade.StopLoss is null || trade.EntryPrice is null)
+            return false;
+
+        var entry = trade.EntryPrice.Value;
+        var isBuy = trade.SideId == (int)TradeSide.Buy;
+        var atr   = AtrAtEntryOrFallback(trade.AtrAtEntry);
+
+        var triggerPrice = isBuy ? entry + breakeven * atr : entry - breakeven * atr;
+        var triggered = isBuy ? candleHigh >= triggerPrice : candleLow <= triggerPrice;
+        if (!triggered)
+            return false;
+
+        var newStopPrice     = isBuy ? entry + breakevenStop * atr : entry - breakevenStop * atr;
+        var currentStopPrice = isBuy ? entry - trade.StopLoss.Value : entry + trade.StopLoss.Value;
+        var ratchetedStop    = isBuy
+            ? Math.Max(currentStopPrice, newStopPrice)   // long: stop only moves up
+            : Math.Min(currentStopPrice, newStopPrice);  // short: stop only moves down
+
+        // Store back as a distance from entry (slPrice = entry ∓ distance).
+        trade.StopLoss = isBuy ? entry - ratchetedStop : ratchetedStop - entry;
+        return true;
+    }
+
+    /// <summary>
+    /// Closes an ML trade at a bracket trigger (or forced) price, applying exit slippage
+    /// (long −, short +) to the fill before the flat fee, matching the env's _close_position.
+    /// </summary>
+    public static decimal CloseMlTrade(
+        Trade trade,
+        decimal triggerPrice,
+        TradeCloseReason reason,
+        decimal slippage,
+        DateTimeOffset time,
+        ref decimal balance)
+    {
+        var exitPrice = trade.SideId == (int)TradeSide.Buy
+            ? triggerPrice - slippage
+            : triggerPrice + slippage;
+        return CloseTrade(trade, exitPrice, reason, time, ref balance);
+    }
+
     // ── Equity / drawdown reporting ────────────────────────────────────────────────
 
     /// <summary>

@@ -93,7 +93,7 @@ public sealed class TradeBotSignalService(
             .AsNoTracking()
             .Where(k => k.SymbolId == tradeBot.SymbolId && k.IntervalId == tradeBot.IntervalId)
             .OrderByDescending(k => k.OpenTime)
-            .Select(k => new { k.Volume, k.TakerBuyBaseAssetVolume })
+            .Select(k => new { k.Volume, k.TakerBuyBaseAssetVolume, AtrValue = (decimal?)(k.Atr != null ? k.Atr.AtrValue : null) })
             .FirstOrDefaultAsync(cancellationToken);
 
         var closedTrades = await dbContext.Trades
@@ -186,12 +186,28 @@ public sealed class TradeBotSignalService(
             return new TradeBotSignalResult(TradeBotSignal.None, "ML decide unavailable (treated as hold).");
         }
 
-        return response.Action switch
+        if (response.Action is not (MlActionEnterLong or MlActionEnterShort))
+            return new TradeBotSignalResult(TradeBotSignal.None, $"ML policy: {response.ActionName}.");
+
+        // The sidecar returns both bracket multipliers on an entry; without them we cannot size the
+        // stop/take-profit, so hold rather than open an unbracketed trade.
+        if (response.SlAtrMult is not decimal slAtrMult || response.TpRMult is not decimal tpRMult)
         {
-            MlActionEnterLong  => new TradeBotSignalResult(TradeBotSignal.EnterLong,  $"ML policy signaled long (confidence={response.Confidence:P1})."),
-            MlActionEnterShort => new TradeBotSignalResult(TradeBotSignal.EnterShort, $"ML policy signaled short (confidence={response.Confidence:P1})."),
-            _ => new TradeBotSignalResult(TradeBotSignal.None, $"ML policy: {response.ActionName}.")
-        };
+            logger.LogWarning(
+                "ML policy {PolicyId} signaled an entry ({Action}) without bracket multipliers; treating as hold.",
+                policy.Id, response.ActionName);
+            return new TradeBotSignalResult(TradeBotSignal.None, "ML entry missing bracket (treated as hold).");
+        }
+
+        var atrAtEntry = BacktestSimulationEngine.AtrAtEntryOrFallback(latestCandle?.AtrValue);
+        var bracket = new MlBracket(slAtrMult, tpRMult, atrAtEntry);
+        var signal = response.Action == MlActionEnterLong ? TradeBotSignal.EnterLong : TradeBotSignal.EnterShort;
+        var direction = response.Action == MlActionEnterLong ? "long" : "short";
+
+        return new TradeBotSignalResult(
+            signal,
+            $"ML policy signaled {direction} (confidence={response.Confidence:P1}).",
+            bracket);
     }
 
     private async Task<MlPolicy?> LoadPolicyAsync(TradeBot tradeBot, CancellationToken cancellationToken)

@@ -50,6 +50,14 @@ public sealed class Trade
     [Precision(28, 10)]
     public decimal? TakeProfit { get; set; }
 
+    /// <summary>
+    /// ATR (Wilder, period 14) of the entry candle, captured when an ML-policy trade opens. The ML
+    /// bracket sizing scales its stop/take-profit/breakeven offsets by this value, so it must be
+    /// persisted to reproduce and to run the live breakeven ratchet. Null for non-ML trades.
+    /// </summary>
+    [Precision(28, 10)]
+    public decimal? AtrAtEntry { get; set; }
+
     public int StatusId { get; set; }
 
     [ForeignKey(nameof(StatusId))]
