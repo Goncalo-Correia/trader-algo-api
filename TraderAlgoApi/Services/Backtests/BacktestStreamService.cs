@@ -167,6 +167,7 @@ public sealed class BacktestStreamService(
             .Include(k => k.SimpleMovingAverage)
             .Include(k => k.RelativeStrengthIndex)
             .Include(k => k.Macd)
+            .Include(k => k.Atr)
             .OrderBy(k => k.OpenTime)
             .ToListAsync(cancellationToken);
 
@@ -183,6 +184,7 @@ public sealed class BacktestStreamService(
             .Include(k => k.SimpleMovingAverage)
             .Include(k => k.RelativeStrengthIndex)
             .Include(k => k.Macd)
+            .Include(k => k.Atr)
             .OrderByDescending(k => k.OpenTime)
             .Take(priorLookback)
             .OrderBy(k => k.OpenTime)
@@ -587,7 +589,10 @@ public sealed class BacktestStreamService(
             k.RelativeStrengthIndex?.Divergence,
             k.Macd?.MacdLine,
             k.Macd?.SignalLine,
-            k.Macd?.Histogram);
+            k.Macd?.Histogram,
+            k.Atr?.Period,
+            k.Atr?.TrueRange,
+            k.Atr?.AtrValue);
 
     // Serializes one typed envelope and writes it as a single WebSocket text frame.
     private static async Task SendMessageAsync<T>(

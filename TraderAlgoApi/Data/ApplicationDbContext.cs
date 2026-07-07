@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using TraderAlgoApi.Models;
 using TraderAlgoApi.Models.Lookups;
+using TraderAlgoApi.Models.Telemetry;
 
 namespace TraderAlgoApi.Data;
 
@@ -24,6 +25,8 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
 
     public DbSet<Macd> Macd => Set<Macd>();
 
+    public DbSet<Atr> Atrs => Set<Atr>();
+
     public DbSet<TradingStrategy>  TradingStrategies  => Set<TradingStrategy>();
     public DbSet<TradingAccount>   TradingAccounts    => Set<TradingAccount>();
 
@@ -39,6 +42,17 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<SyncJobStatus> SyncJobStatuses => Set<SyncJobStatus>();
 
     public DbSet<SyncJobError> SyncJobErrors => Set<SyncJobError>();
+
+    // ── Performance telemetry (written by the Python ML sidecar; read-only here) ──
+    public DbSet<TrainingRunPerformance> TrainingRunPerformances => Set<TrainingRunPerformance>();
+    public DbSet<TrainingLearningCurve> TrainingLearningCurves => Set<TrainingLearningCurve>();
+    public DbSet<TrainingCheckpointEval> TrainingCheckpointEvals => Set<TrainingCheckpointEval>();
+    public DbSet<TrainingFoldResult> TrainingFoldResults => Set<TrainingFoldResult>();
+    public DbSet<TrainingSplitMetrics> TrainingSplitMetrics => Set<TrainingSplitMetrics>();
+    public DbSet<TrainingEquityPoint> TrainingEquityPoints => Set<TrainingEquityPoint>();
+    public DbSet<TrainingTrade> TrainingTrades => Set<TrainingTrade>();
+    public DbSet<TrainingFeatureQuality> TrainingFeatureQualities => Set<TrainingFeatureQuality>();
+    public DbSet<TrainingChartArtifact> TrainingChartArtifacts => Set<TrainingChartArtifact>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -439,6 +453,51 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
                 .WithOne(kline => kline.Macd)
                 .HasForeignKey<Macd>(macd => macd.KlineDataId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<Atr>(entity =>
+        {
+            entity.HasKey(atr => atr.KlineDataId);
+
+            entity.HasOne(atr => atr.KlineData)
+                .WithOne(kline => kline.Atr)
+                .HasForeignKey<Atr>(atr => atr.KlineDataId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // -------------------------------------------------------------------
+        // Performance telemetry — denormalised read-store in the public schema.
+        // Written by the Python ML sidecar over direct Postgres and read here via
+        // MlPerformanceController. Owned by this schema and managed by EF migrations.
+        // Intentionally FK-free: the sidecar streams child rows (learning curve /
+        // checkpoint evals) before the parent summary row exists, and enforces its
+        // own idempotency via delete-then-insert per run. Table/column names come
+        // from [Table]/[Column] attributes on the entities.
+        // -------------------------------------------------------------------
+        modelBuilder.Entity<TrainingRunPerformance>(entity =>
+        {
+            entity.Property(e => e.GateDetail).HasDefaultValueSql("'{}'::jsonb");
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
+            entity.HasIndex(e => new { e.MlPolicyId, e.CreatedAt });
+        });
+        modelBuilder.Entity<TrainingLearningCurve>()
+            .HasIndex(e => new { e.RunId, e.Timesteps });
+        modelBuilder.Entity<TrainingCheckpointEval>()
+            .HasIndex(e => new { e.RunId, e.Timesteps });
+        modelBuilder.Entity<TrainingFoldResult>()
+            .HasIndex(e => new { e.RunId, e.Fold });
+        modelBuilder.Entity<TrainingSplitMetrics>()
+            .HasIndex(e => new { e.RunId, e.Split });
+        modelBuilder.Entity<TrainingEquityPoint>()
+            .HasIndex(e => new { e.RunId, e.Split, e.Ts });
+        modelBuilder.Entity<TrainingTrade>()
+            .HasIndex(e => new { e.RunId, e.Split, e.EntryTime });
+        modelBuilder.Entity<TrainingFeatureQuality>()
+            .HasIndex(e => new { e.RunId, e.Feature });
+        modelBuilder.Entity<TrainingChartArtifact>(entity =>
+        {
+            entity.HasKey(c => new { c.RunId, c.ChartKey });
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
         });
     }
 }

@@ -155,6 +155,8 @@ public sealed class BinanceKlineStreamingService(
             Symbol: kline.Symbol,
             Interval: kline.Interval,
             OpenTime: kline.OpenTime,
+            High: kline.High,
+            Low: kline.Low,
             Close: kline.Close));
 
         candleAggregator.OnCandleClosed(

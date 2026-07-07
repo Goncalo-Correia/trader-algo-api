@@ -12,10 +12,13 @@ public sealed class BinanceMarketDataService(
     ILogger<BinanceMarketDataService> logger,
     ISimpleMovingAverageService smaService,
     IRsiService rsiService,
-    IMacdService macdService) : IBinanceMarketDataService, IMarketDataProvider
+    IMacdService macdService,
+    IAtrService atrService) : IBinanceMarketDataService, IMarketDataProvider
 {
     private const string HttpClientName = "Binance";
     private const string DefaultWebSocketBaseUrl = "wss://stream.binance.com:443";
+    // Wilder's ATR averaging period; mirrors the value persisted by IndicatorSyncService.
+    private const int AtrDefaultPeriod = 14;
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
 
     public async Task<IReadOnlyList<BinanceKline>> GetKlinesAsync(
@@ -124,6 +127,8 @@ public sealed class BinanceMarketDataService(
 
         var historicalKlines = await GetKlinesAsync(symbol, interval, limit: WindowSize, cancellationToken: cancellationToken);
         var closes = historicalKlines.Select(k => k.Close).ToList();
+        var highs = historicalKlines.Select(k => k.High).ToList();
+        var lows = historicalKlines.Select(k => k.Low).ToList();
         var lastKlineTime = historicalKlines.Count > 0
             ? historicalKlines[^1].OpenTime.ToUnixTimeSeconds()
             : 0L;
@@ -137,13 +142,23 @@ public sealed class BinanceMarketDataService(
                 if (kline.Time == lastKlineTime)
                 {
                     if (closes.Count > 0)
+                    {
                         closes[^1] = kline.Close;
+                        highs[^1] = kline.High;
+                        lows[^1] = kline.Low;
+                    }
                 }
                 else
                 {
                     closes.Add(kline.Close);
+                    highs.Add(kline.High);
+                    lows.Add(kline.Low);
                     if (closes.Count > WindowSize)
+                    {
                         closes.RemoveAt(0);
+                        highs.RemoveAt(0);
+                        lows.RemoveAt(0);
+                    }
                     lastKlineTime = kline.Time;
                 }
 
@@ -158,6 +173,9 @@ public sealed class BinanceMarketDataService(
 
                 var macdValues = macdService.ComputeAll(closes);
                 var (macdLine, signalLine, histogram) = macdValues[lastIndex];
+
+                var atrValues = atrService.ComputeAll(highs, lows, closes);
+                var (trueRange, atr) = atrValues[lastIndex];
 
                 return new CandleWithIndicatorsResponseDto(
                     kline.Time,
@@ -175,7 +193,10 @@ public sealed class BinanceMarketDataService(
                     divergence,
                     macdLine,
                     signalLine,
-                    histogram);
+                    histogram,
+                    AtrDefaultPeriod,
+                    trueRange,
+                    atr);
             },
             cancellationToken);
     }

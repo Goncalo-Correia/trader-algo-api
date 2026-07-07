@@ -9,8 +9,12 @@ public sealed class IndicatorSyncService(
     ISimpleMovingAverageService smaService,
     IRsiService rsiService,
     IMacdService macdService,
+    IAtrService atrService,
     ILogger<IndicatorSyncService> logger) : IIndicatorSyncService
 {
+    // Wilder's ATR averaging period; persisted per-row so the value is self-describing.
+    private const int AtrPeriod = 14;
+
     // Candles processed per window. Caps peak memory (close/RSI/MACD arrays, existing-row
     // dictionaries and the EF change tracker are all sized to a window, not the whole range),
     // so a multi-million-candle recompute stays flat in memory instead of OOM-ing.
@@ -74,7 +78,15 @@ public sealed class IndicatorSyncService(
             .Select(k => (DateTimeOffset?)k.OpenTime)
             .FirstOrDefaultAsync(cancellationToken);
 
-        var candidates = new[] { fromSma, fromRsi, fromMacd }
+        var fromAtr = await dbContext.KlineData
+            .AsNoTracking()
+            .Where(k => k.SymbolId == symbol.Id && k.IntervalId == interval.Id
+                && !dbContext.Atrs.Any(a => a.KlineDataId == k.Id))
+            .OrderBy(k => k.OpenTime)
+            .Select(k => (DateTimeOffset?)k.OpenTime)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var candidates = new[] { fromSma, fromRsi, fromMacd, fromAtr }
             .Where(dt => dt.HasValue)
             .Select(dt => dt!.Value)
             .ToList();
@@ -162,7 +174,7 @@ public sealed class IndicatorSyncService(
             var targetKlines = await windowQuery
                 .OrderBy(k => k.OpenTime)
                 .Take(WindowSize)
-                .Select(k => new { k.Id, k.OpenTime, k.Close })
+                .Select(k => new { k.Id, k.OpenTime, k.High, k.Low, k.Close })
                 .ToListAsync(cancellationToken);
 
             if (targetKlines.Count == 0)
@@ -170,22 +182,25 @@ public sealed class IndicatorSyncService(
 
             var windowFirstOpenTime = targetKlines[0].OpenTime;
 
-            // Prior candles for look-back context (SMA-100 needs 99; RSI-14 Wilder's needs ~200).
+            // Prior candles for look-back context (SMA-100 needs 99; RSI-14/ATR-14 Wilder's need ~200).
             // Re-seeded per window so each algorithm's state is continuous within the window.
-            var contextCloses = await dbContext.KlineData
+            var contextCandles = await dbContext.KlineData
                 .AsNoTracking()
                 .Where(k => k.SymbolId == symbolId && k.IntervalId == intervalId && k.OpenTime < windowFirstOpenTime)
                 .OrderByDescending(k => k.OpenTime)
                 .Take(ContextSize)
                 .OrderBy(k => k.OpenTime)
-                .Select(k => k.Close)
+                .Select(k => new { k.High, k.Low, k.Close })
                 .ToListAsync(cancellationToken);
 
-            var allCloses = contextCloses.Concat(targetKlines.Select(t => t.Close)).ToList();
-            var contextCount = contextCloses.Count;
+            var allHighs  = contextCandles.Select(c => c.High).Concat(targetKlines.Select(t => t.High)).ToList();
+            var allLows   = contextCandles.Select(c => c.Low).Concat(targetKlines.Select(t => t.Low)).ToList();
+            var allCloses = contextCandles.Select(c => c.Close).Concat(targetKlines.Select(t => t.Close)).ToList();
+            var contextCount = contextCandles.Count;
 
             var allRsiValues = rsiService.ComputeAll(allCloses);
             var allMacdValues = macdService.ComputeAll(allCloses);
+            var allAtrValues = atrService.ComputeAll(allHighs, allLows, allCloses, AtrPeriod);
 
             var targetIds = targetKlines.Select(t => t.Id).ToList();
 
@@ -201,6 +216,10 @@ public sealed class IndicatorSyncService(
             var existingMacds = await dbContext.Macd
                 .Where(m => targetIds.Contains(m.KlineDataId))
                 .ToDictionaryAsync(m => m.KlineDataId, cancellationToken);
+
+            var existingAtrs = await dbContext.Atrs
+                .Where(a => targetIds.Contains(a.KlineDataId))
+                .ToDictionaryAsync(a => a.KlineDataId, cancellationToken);
 
             for (var i = 0; i < targetKlines.Count; i++)
             {
@@ -290,6 +309,35 @@ public sealed class IndicatorSyncService(
                         MacdLine = macdLine,
                         SignalLine = signalLine,
                         Histogram = histogram
+                    });
+                    insertedCount++;
+                }
+
+                // ── ATR ─────────────────────────────────────────────────────────────
+                var (trueRange, atr) = allAtrValues[targetIdx];
+
+                if (existingAtrs.TryGetValue(target.Id, out var existingAtr))
+                {
+                    if (existingAtr.Period == AtrPeriod && existingAtr.TrueRange == trueRange && existingAtr.AtrValue == atr)
+                    {
+                        skippedCount++;
+                    }
+                    else
+                    {
+                        existingAtr.Period = AtrPeriod;
+                        existingAtr.TrueRange = trueRange;
+                        existingAtr.AtrValue = atr;
+                        updatedCount++;
+                    }
+                }
+                else
+                {
+                    dbContext.Atrs.Add(new Atr
+                    {
+                        KlineDataId = target.Id,
+                        Period = AtrPeriod,
+                        TrueRange = trueRange,
+                        AtrValue = atr
                     });
                     insertedCount++;
                 }
