@@ -53,6 +53,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<TrainingTrade> TrainingTrades => Set<TrainingTrade>();
     public DbSet<TrainingFeatureQuality> TrainingFeatureQualities => Set<TrainingFeatureQuality>();
     public DbSet<TrainingChartArtifact> TrainingChartArtifacts => Set<TrainingChartArtifact>();
+    public DbSet<TrainingDecisionLog> TrainingDecisionLogs => Set<TrainingDecisionLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -497,6 +498,11 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         modelBuilder.Entity<TrainingChartArtifact>(entity =>
         {
             entity.HasKey(c => new { c.RunId, c.ChartKey });
+            entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
+        });
+        modelBuilder.Entity<TrainingDecisionLog>(entity =>
+        {
+            entity.Property(e => e.Payload).HasDefaultValueSql("'{}'::jsonb");
             entity.Property(e => e.CreatedAt).HasDefaultValueSql("now()");
         });
     }

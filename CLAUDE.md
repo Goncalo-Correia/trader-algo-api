@@ -66,8 +66,12 @@ the factory. A second context, `MlflowDbContext`, is read-only over the MLflow t
 
 **Some tables are written by the ML sidecar, not this app.** The `training_*` telemetry tables
 (`Models/Telemetry/`, mapped in `ApplicationDbContext` and created by a migration so the schema is
-tracked) are populated by the Python `trader-algo-ml` sidecar. `MlPerformanceController` (routes under
-`/api/ml`) only ever **reads** them — treat them as an external read model; don't add write paths.
+tracked) are **written by the Python `trader-algo-ml` sidecar** — treat them as an external read
+model and don't add telemetry-producing write paths from this app. This app only **reads** them
+(e.g. `MlPerformanceController` under `/api/ml`; `training_decisions` is served via
+`GetTrainingDecisionLogAsync` in [Data/TrainingDecisionsQueryExtensions.cs](TraderAlgoApi/Data/TrainingDecisionsQueryExtensions.cs)
+instead of proxying the sidecar) and **deletes** rows as cleanup when a training run is removed
+(`MlController` DELETE `training-runs/{id}`).
 
 **Enum ↔ lookup-table dual representation (important).** Every lookup (TradeSide, TradeStatus,
 TradingStrategy, SyncJobType, etc.) exists as both:

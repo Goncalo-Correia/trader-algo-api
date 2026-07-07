@@ -4,9 +4,10 @@ using System.Text.Json.Serialization;
 namespace TraderAlgoApi.Dtos.Ml;
 
 /// <summary>
-/// Deterministic decision log for a trained model, served by the Python ML service
-/// (GET /training-runs/{model_id}/decisions). Replayed candle-by-candle so the
-/// model's decision process can be visualized like an automated backtest.
+/// Deterministic decision log for a trained model. The Python ML sidecar writes this payload as a
+/// JSON blob to the <c>training_decisions</c> telemetry table; this API deserializes it to serve
+/// GET/DELETE <c>/api/ml/training-runs/{id}/decisions</c>. Replayed candle-by-candle so the model's
+/// decision process can be visualized like an automated backtest.
 /// </summary>
 public sealed record MlTrainingDecisionsResponse(
     [property: JsonPropertyName("ml_policy_id")]   long MlPolicyId,

@@ -181,7 +181,9 @@ public sealed class MlController(
         long id,
         CancellationToken cancellationToken)
     {
-        var decisions = await mlConnector.GetTrainingDecisionsAsync(id, cancellationToken);
+        // Served from the training_decisions telemetry table the sidecar writes (no longer
+        // proxied to the Python service).
+        var decisions = await dbContext.GetTrainingDecisionLogAsync(id, cancellationToken);
         return decisions is null
             ? NotFound($"No training decision log for run {id}.")
             : Ok(decisions);
@@ -194,8 +196,12 @@ public sealed class MlController(
         if (run is null)
             return NotFound($"Training run {id} not found.");
 
-        // Remove the decision log on the ML service first (best-effort), then the DB record.
-        await mlConnector.DeleteTrainingDecisionsAsync(id, cancellationToken);
+        // Drop the run's decision log (telemetry table is FK-free, so delete it explicitly),
+        // then the run record itself.
+        var key = id.ToString();
+        await dbContext.TrainingDecisionLogs
+            .Where(d => d.RunId == key)
+            .ExecuteDeleteAsync(cancellationToken);
 
         dbContext.MlTrainingRuns.Remove(run);
         await dbContext.SaveChangesAsync(cancellationToken);

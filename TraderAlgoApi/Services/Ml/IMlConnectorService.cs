@@ -18,17 +18,4 @@ public interface IMlConnectorService
     /// </summary>
     Task<IReadOnlyList<MlModelInfoResponse>> GetModelsAsync(
         CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Fetches a run's deterministic training decision log. Returns null if the run has
-    /// no decision log yet (e.g. training not finished / never run).
-    /// </summary>
-    Task<MlTrainingDecisionsResponse?> GetTrainingDecisionsAsync(
-        long trainingRunId,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>Best-effort delete of a run's decision log on the ML service.</summary>
-    Task DeleteTrainingDecisionsAsync(
-        long trainingRunId,
-        CancellationToken cancellationToken = default);
 }

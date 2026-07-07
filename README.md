@@ -383,8 +383,9 @@ sequenceDiagram
    moving the run `Pending → Running → Completed` (or `Failed`) and recording final balance, PnL %,
    out-of-sample balance/PnL %, and trade count. Terminal states are final: a late or duplicate
    callback for an already `Completed`/`Failed` run is ignored so it cannot clobber the recorded result.
-3. Each run's deterministic **decision log** is stored uniquely by `trainingRunId` (never
-   overwritten), so re-running a policy preserves every run's history.
+3. Each run's deterministic **decision log** is written by the sidecar to the `training_decisions`
+   telemetry table keyed by `trainingRunId`; distinct runs keep distinct rows, so re-running a policy
+   preserves every run's history.
 4. `POST /api/ml/retrain-all { from, to }` kicks off a run for **every** policy over a shared date
    range — used for the one-time retrain required after an observation-schema change (see below).
 
@@ -438,8 +439,8 @@ cash drawdown from peak balance.
 database) zipped with the model's per-candle decisions — emitting `candle` and `mlDecision` frames —
 so entry/hold choices and confidence can be visualised candle-by-candle.
 `GET /api/ml/training-runs/{id}/decisions` returns the same log as a single payload (including
-`oos_pnl_pct` / `oos_final_balance` when available). Deleting a run also removes its decision log from
-the sidecar.
+`oos_pnl_pct` / `oos_final_balance` when available), read from the `training_decisions` table the
+sidecar writes. Deleting a run also removes its row from that table.
 
 **MLflow tracking.** `GET /api/ml/training-runs/{id}/tracking` returns read-only MLflow metadata,
 params, latest metrics, metric history, and a `rewardMetrics` dashboard linked by the MLflow param

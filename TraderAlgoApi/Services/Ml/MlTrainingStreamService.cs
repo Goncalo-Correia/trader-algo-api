@@ -11,12 +11,11 @@ namespace TraderAlgoApi.Services.Ml;
 /// <summary>
 /// Streams a trained model's decision process over a WebSocket. The OHLCV+indicator
 /// candles come from the database (the source of truth); the per-candle model decisions
-/// come from the Python service's persisted training decision log. The two are zipped by
-/// candle open-time and emitted in order, mirroring the backtest replay stream.
+/// come from the persisted training decision log (the training_decisions telemetry table). The
+/// two are zipped by candle open-time and emitted in order, mirroring the backtest replay stream.
 /// </summary>
 public sealed class MlTrainingStreamService(
     IDbContextFactory<ApplicationDbContext> dbContextFactory,
-    IMlConnectorService mlConnector,
     ILogger<MlTrainingStreamService> logger) : IMlTrainingStreamService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -52,7 +51,7 @@ public sealed class MlTrainingStreamService(
             return;
         }
 
-        var decisionLog = await mlConnector.GetTrainingDecisionsAsync(trainingRunId, cancellationToken);
+        var decisionLog = await dbContext.GetTrainingDecisionLogAsync(trainingRunId, cancellationToken);
         if (decisionLog is null)
         {
             context.Response.StatusCode = StatusCodes.Status404NotFound;
