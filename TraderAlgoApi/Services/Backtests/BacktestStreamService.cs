@@ -565,7 +565,15 @@ public sealed class BacktestStreamService(
 
         var day = BacktestSimulationEngine.EasternDay(current.OpenTime);
         dailyStats.TryGetValue(day, out var todayStats);
-        var currentDailyDrawdown = Math.Max(0m, -todayStats.Pnl);
+        var currentDailyDrawdownCash = Math.Max(0m, -todayStats.Pnl);
+        // current_daily_drawdown is a FRACTION in [0, 1] of the day-start balance (train/serve unit
+        // contract), matching the live path in TradeBotSignalService. day-start = current balance
+        // minus today's realized PnL. The cash figure is still used for the DailyDrawdownReached flag,
+        // which is compared against the cash DailyDrawdownLimit.
+        var dayStartBalance = balance - todayStats.Pnl;
+        var currentDailyDrawdown = dayStartBalance > 0m
+            ? currentDailyDrawdownCash / dayStartBalance
+            : 0m;
         var (winsInRow, lossesInRow) = CountStreaks(closedTradeHistory);
         var lastTrade = closedTradeHistory.LastOrDefault(t => t.ClosedAt.HasValue);
         var candlesSinceLastTradeClosed = lastClosedCandleIndex.HasValue
@@ -601,7 +609,7 @@ public sealed class BacktestStreamService(
             TradesTakenToday: closedTradeHistory.Count(
                 t => t.OpenedAt.HasValue && BacktestSimulationEngine.EasternDay(t.OpenedAt.Value) == day),
             DailyProfitTargetReached: policy.DailyProfit > 0m && todayStats.Pnl >= policy.DailyProfit,
-            DailyDrawdownReached: policy.DailyDrawdownLimit > 0m && currentDailyDrawdown >= policy.DailyDrawdownLimit,
+            DailyDrawdownReached: policy.DailyDrawdownLimit > 0m && currentDailyDrawdownCash >= policy.DailyDrawdownLimit,
             LastTradePnl: lastTrade?.Pnl ?? 0m,
             LastTradeCloseReason: CloseReasonName(lastTrade),
             CandlesSinceLastTradeClosed: candlesSinceLastTradeClosed,

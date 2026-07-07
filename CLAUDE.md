@@ -26,7 +26,8 @@ dotnet ef database update      # apply migrations (81+ exist; the DB schema is m
 - **`ApiKey` must be set** (user-secrets locally) or the app fails to start. Also set
   `ConnectionStrings:Supabase`. See README → Running locally / Environment variables.
 - **No test project exists and the owner does not want tests** — do not add a test framework or
-  write tests unless explicitly asked.
+  write tests unless explicitly asked. There is also no linter/formatter configured: `dotnet build`
+  (and running the app) is the only verification gate.
 - Deployed on Render via the root `Dockerfile` (binds Kestrel to `:10000`).
 
 ## Architecture patterns
@@ -47,10 +48,26 @@ in-process background-job queue one at a time). WebSocket streams also subscribe
 [WebSockets/WebSocketEndpoints.cs](TraderAlgoApi/WebSockets/WebSocketEndpoints.cs), each delegating to
 a `*StreamService`. They're `.ExcludeFromDescription()`'d (hidden from Swagger).
 
+**Market clock (two implementations — mind the difference).** Session-hours logic exists in two
+places: `NyseSessionService` (stateless singleton) backs the `/api/session/*` aggregate endpoints and
+honours a **holiday calendar**; `BacktestSimulationEngine.IsWithinNySession` (pure static) enforces
+the bots' `isNySessionOnly` entry gate and only excludes **weekends** (no holidays). Both the live
+`TradeBotMonitorService` and the backtest engine gate entries through the *same* logic — the backtest
+via `BacktestSimulationEngine.CanEnterToday`, the live monitor by reusing `IsWithinNySession` plus a
+per-day `DailyProfitGoal`/`MaxLossesPerDay` check that mirrors it — so the two modes gate entries
+identically (entries only; exits/opposite-signal closes still run outside the session or after a daily
+limit). The two session implementations are not equivalent (holidays); reconcile them rather than
+adding a third if you touch this.
+
 **DbContext registered twice, deliberately.** Both `AddDbContext` (scoped, for request work) and
 `AddDbContextFactory` (for long-lived WebSocket streams and background jobs that must not hold a
 request-scoped context open). In background/stream code, create a fresh context per unit of work via
 the factory. A second context, `MlflowDbContext`, is read-only over the MLflow tracking schema.
+
+**Some tables are written by the ML sidecar, not this app.** The `training_*` telemetry tables
+(`Models/Telemetry/`, mapped in `ApplicationDbContext` and created by a migration so the schema is
+tracked) are populated by the Python `trader-algo-ml` sidecar. `MlPerformanceController` (routes under
+`/api/ml`) only ever **reads** them — treat them as an external read model; don't add write paths.
 
 **Enum ↔ lookup-table dual representation (important).** Every lookup (TradeSide, TradeStatus,
 TradingStrategy, SyncJobType, etc.) exists as both:
@@ -73,8 +90,9 @@ via `AddMarketDataProviders`. Keep new provider code behind that abstraction.
 gated by a Basic-auth variant), `GlobalExceptionHandler` (RFC 7807 ProblemDetails for everything
 uncaught — return typed errors, don't hand-roll error bodies), `DatabaseHealthCheck`.
 
-**Indicators** (`SimpleMovingAverage`, `RelativeStrengthIndex`, `Macd`) are one-to-one side tables
-keyed on `KlineData.Id` (cascade delete), recomputed incrementally whenever a candle is inserted/updated.
+**Indicators** (`SimpleMovingAverage`, `RelativeStrengthIndex`, `Macd`, `Atr`) are one-to-one side
+tables keyed on `KlineData.Id` (cascade delete), recomputed incrementally whenever a candle is
+inserted/updated. Each has its own `I*Service`; `IIndicatorSyncService` recomputes them together.
 
 ## Conventions
 

@@ -106,10 +106,15 @@ public sealed class TradeBotSignalService(
             .ToListAsync(cancellationToken);
 
         var today = BacktestSimulationEngine.EasternDay(timeProvider.GetUtcNow());
-        var todaysTrades = closedTrades
-            .Where(t => t.OpenedAt.HasValue && BacktestSimulationEngine.EasternDay(t.OpenedAt.Value) == today)
-            .ToList();
-        var currentDailyPnl = todaysTrades.Sum(t => t.Pnl ?? 0m);
+        // Daily realized PnL uses trades that CLOSED today (Eastern) — the same close-day convention
+        // as the entry-limit gate (TradeBotMonitorService) and the backtest's dailyStats, so the
+        // sidecar sees identical daily accounting whether live or backtesting.
+        var currentDailyPnl = closedTrades
+            .Where(t => t.ClosedAt.HasValue && BacktestSimulationEngine.EasternDay(t.ClosedAt.Value) == today)
+            .Sum(t => t.Pnl ?? 0m);
+        // Trades *taken* today counts entries OPENED today (Eastern) — matches the backtest observation.
+        var tradesTakenToday = closedTrades
+            .Count(t => t.OpenedAt.HasValue && BacktestSimulationEngine.EasternDay(t.OpenedAt.Value) == today);
         var currentDailyDrawdownCash = Math.Max(0m, -currentDailyPnl);
         // The ML training environment expects current_daily_drawdown as a FRACTION in [0, 1] of the
         // day-start balance, not absolute cash. day-start = current balance minus today's PnL.
@@ -150,7 +155,7 @@ public sealed class TradeBotSignalService(
             CurrentDailyDrawdown: currentDailyDrawdown,
             WinsInRow: winsInRow,
             LossesInRow: lossesInRow,
-            TradesTakenToday: todaysTrades.Count,
+            TradesTakenToday: tradesTakenToday,
             DailyProfitTargetReached: policy.DailyProfit > 0m && currentDailyPnl >= policy.DailyProfit,
             DailyDrawdownReached: policy.DailyDrawdownLimit > 0m && currentDailyDrawdownCash >= policy.DailyDrawdownLimit,
             LastTradePnl: lastTrade?.Pnl ?? 0m,

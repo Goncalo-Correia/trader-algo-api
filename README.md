@@ -12,6 +12,7 @@ to **Kronos** for AI candle forecasting and an **ML policy** sidecar for model-d
 - [Architecture](#architecture)
 - [Core runtime](#core-runtime)
 - [Market data & live charts](#market-data--live-charts)
+- [Trading sessions](#trading-sessions)
 - [Trading strategies](#trading-strategies)
 - [Trades](#trades)
 - [Trading accounts](#trading-accounts)
@@ -128,6 +129,29 @@ sequenceDiagram
     Stream-->>UI: candle [+ indicators] frame
   end
 ```
+
+---
+
+## Trading sessions
+
+Although the market data is crypto (24/7), the app models the **NYSE regular session** (09:30–16:00
+US/Eastern, weekends and US market holidays excluded) as a reference clock. `NyseSessionService`
+resolves the current/previous session window and whether the market is open, honouring the DST-aware
+Eastern time zone and a hard-coded holiday calendar. A bot's `isNySessionOnly` flag restricts **new
+entries** to that window; open positions are still managed (SL/TP and opposite-signal closes fire
+outside the session too). The rule is applied identically to live trade bots and backtests — both
+share the backtest engine's session check — so a session-only strategy trades the same in either mode.
+
+Three read-only endpoints expose session aggregates for the frontend, all computed from stored `1m`
+candles for a symbol (defaults to the default symbol when `symbol` is omitted):
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/session/current` | OHLCV for the current (in-progress or just-closed) session + session start/end (Unix ms). |
+| `GET /api/session/previous` | Same shape for the prior session day. |
+| `GET /api/session/volume-profile?buckets=` | Volume-by-price for the current session — `buckets` (default 30) price levels, each with total and taker-buy volume. |
+
+Each returns `404` when no candles exist in the window.
 
 ---
 
@@ -261,6 +285,13 @@ Rules: only **one active trade per bot/account** (new same-direction signals are
 position is open); an opposite-direction signal closes the current trade; enabling a bot that
 already has an active trade on its account is rejected to avoid double entry. Live trade events are
 pushed to `WS /ws/tradebots/events?tradingAccountId=`.
+
+**Entry gates.** Before opening a position the bot applies the same entry gates as a backtest (shared
+`BacktestSimulationEngine.CanEnterToday` logic): `isNySessionOnly` restricts entries to the NY session,
+`dailyProfitGoal` stops new entries once the account's realized PnL for the current Eastern day reaches
+the goal, and `maxLossesPerDay` stops them once that day's losing-trade count reaches the cap. All
+three gate **entries only** — existing positions are still managed (SL/TP and opposite-signal closes
+fire regardless) — and behave identically in live trading and backtests.
 
 ---
 
@@ -420,6 +451,27 @@ summary when MLflow data is available. Configure `Mlflow:TrackingUri` or the raw
 `trader-algo-ml`; the API converts `postgresql://...` MLflow URIs to Npgsql connection strings for
 read-only queries.
 
+**Performance telemetry.** Alongside MLflow, the sidecar writes a set of denormalised `training_*`
+tables into the shared Postgres (run summary, learning curve, checkpoint evals, walk-forward folds,
+split metrics, equity/drawdown series, trade log, feature quality, chart artifacts). This API exposes
+them **read-only** — it never writes them — as a thin mirror of the sidecar's own Performance API, so
+the frontend can render per-run analytics dashboards. The DB `run_id` is text but maps to
+`MlTrainingRun.id`, so routes take the run id as an int:
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/ml/training-runs/{id}/performance` | Run summary: status, scheme, promotion/gate result, in-sample vs OOS headline metrics. |
+| `GET /api/ml/training-runs/{id}/learning-curve` | Mean/std episode reward and length vs timesteps. |
+| `GET /api/ml/training-runs/{id}/checkpoint-evals` | Per-eval train/val reward + drawdown, score, `eligible`/`is_best`. |
+| `GET /api/ml/training-runs/{id}/folds` | Per-fold walk-forward results (return, Sharpe, profit factor, win rate, …). |
+| `GET /api/ml/training-runs/{id}/metrics[?split=]` | Full-report metrics per split (`train`/`val`/`test`/`oos`). |
+| `GET /api/ml/training-runs/{id}/equity[?split=&stitched=&limit=&offset=]` | Paginated equity + drawdown series (or the stitched compounded OOS curve). |
+| `GET /api/ml/training-runs/{id}/trades[?split=&limit=&offset=]` | Paginated simulated-trade log. |
+| `GET /api/ml/training-runs/{id}/feature-quality` | Per-feature stationarity, 1-bar Spearman signal, collinearity flags. |
+| `GET /api/ml/training-runs/{id}/charts` | Pre-rendered chart artifacts (`storagePath` only — this API has no Storage integration, so `signedUrl` is always null). |
+| `GET /api/ml/policies/{id}/runs` | Chronological run list for a policy — the run-over-run trend view. |
+| `GET /api/ml/policies/{id}/performance` | The currently-promoted run's performance summary for a policy. |
+
 **Inference.** `POST /api/ml/decide` fetches the latest candle+indicators and asks the sidecar for an
 entry action — this is what the live `MlPolicy` strategy and ML backtests call while flat. The
 decision is made on a **closed candle**; the live path enters at that candle's **close** to match the
@@ -522,6 +574,8 @@ require the API key** (`/health` is the only exception) — see [Authentication]
 | **Trades** | `POST /trades` · `POST /trades/{id}/stop` · `PATCH /trades/{id}` · `GET /trades/account/{id}/active` · `/history` · `GET /trades/backtest/{id}` |
 | **ML policies** | `GET/POST /ml/policies` · `GET/PUT/DELETE /ml/policies/{id}` |
 | **ML training** | `POST /ml/train` · `POST /ml/retrain-all` · `POST /ml/decide` · `GET /ml/served-models` · `GET /ml/training-runs[?mlPolicyId=]` · `GET/DELETE /ml/training-runs/{id}` · `GET /ml/training-runs/{id}/tracking` · `GET /ml/training-runs/{id}/decisions` · `PATCH /ml/training-runs/{id}/complete` |
+| **ML performance** (read-only telemetry) | `GET /ml/training-runs/{id}/{performance\|learning-curve\|checkpoint-evals\|folds\|metrics\|equity\|trades\|feature-quality\|charts}` · `GET /ml/policies/{id}/runs` · `GET /ml/policies/{id}/performance` |
+| **Sessions** | `GET /session/current` · `GET /session/previous` · `GET /session/volume-profile?buckets=` (all `?symbol=`) |
 | **Rules** | `GET /rules/{sma\|rsi\|macd}/evaluate?symbol=&interval=` |
 | **Charts** | `GET /charts/candles?symbol=&interval=&lookback=` · `GET /charts/candles/indicators` · `GET /charts/candles/indicators/date-interval?from=&to=&symbol=&interval=` |
 | **Symbols / Intervals** | `GET /symbols` · `GET /intervals` |
@@ -604,10 +658,15 @@ Render can probe it). How the key is presented depends on the caller:
 Inside the Swagger UI, click **Authorize** and paste the key to make the "Try it out" calls send
 the `X-Api-Key` header.
 
-> **CORS vs. host filtering.** When the frontend is deployed (e.g. to Vercel), add its origin to the
-> CORS policy in `Program.cs` (`WithOrigins(...)`) — *not* to `AllowedHosts`. `AllowedHosts` filters
-> the inbound `Host` header and should list the **API's** own hostname
-> (`trader-algo-api.onrender.com`); CORS controls which **browser origins** may call it.
+> **CORS vs. host filtering.** When the frontend is deployed, add its origin to `Cors:AllowedOrigins`
+> (the `Cors__AllowedOrigins` env var on the host, or the `Cors:AllowedOrigins` value in
+> `appsettings.json`) — a `;`/`,`-separated list that `Program.cs` merges with the localhost dev
+> origins. The deployed UIs (`https://trader-algo-ui.onrender.com`, `https://trader-algo-ui.vercel.app`)
+> ship as defaults in `appsettings.json`. Do **not** add UI origins to `AllowedHosts`: that filters the
+> inbound `Host` header and should list the **API's** own hostname (`trader-algo-api.onrender.com`);
+> CORS controls which **browser origins** may call it. Note the env var *replaces* the appsettings
+> value rather than merging — if `Cors__AllowedOrigins` is set on the host, include every deployed
+> origin there.
 
 ---
 
@@ -633,6 +692,7 @@ committed; locally they live in user-secrets, in production they're set as envir
 | `Binance__WebSocketBaseUrl` | No | `wss://stream.binance.com:443` | Binance WebSocket stream base URL. |
 | `Kronos__BaseUrl` | No | `http://host.docker.internal:8000` | Base URL of the optional Kronos forecast sidecar. The default only resolves when a sidecar runs on the same host; on Render leave it unset (Kronos endpoints stay inactive) or point it at a reachable URL. |
 | `MlPolicy__BaseUrl` | No | `http://host.docker.internal:8766` | Base URL of the optional ML policy sidecar. Same caveat as `Kronos__BaseUrl`. |
+| `MlPolicy__ApiKey` | No | — | Shared secret sent as the `X-API-Key` header on every call to the ML sidecar. The sidecar gates all endpoints except `/health` behind this key when it is configured with one (required when the sidecar is publicly reachable). Leave unset for a local/private sidecar that has auth disabled. |
 | `ASPNETCORE_FORWARDEDHEADERS_ENABLED` | No | unset | Set to `true` behind a TLS-terminating proxy (like Render) so the app trusts `X-Forwarded-Proto`/`X-Forwarded-For`. Enable it if HTTPS redirection causes redirect loops. |
 
 **Don't set on Render:** `Kestrel__Certificates__Development__Password` (local HTTPS dev cert only) or

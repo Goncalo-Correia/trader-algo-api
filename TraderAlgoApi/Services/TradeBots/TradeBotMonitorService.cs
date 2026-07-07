@@ -4,6 +4,7 @@ using TraderAlgoApi.Data;
 using TraderAlgoApi.Dtos.TradeEvents;
 using TraderAlgoApi.Dtos.Trades;
 using TraderAlgoApi.Models.Enums;
+using TraderAlgoApi.Services.Backtests;
 using TraderAlgoApi.Services.MarketData;
 using TraderAlgoApi.Services.TradeEvents;
 using TraderAlgoApi.Services.Trades;
@@ -70,7 +71,7 @@ public sealed class TradeBotMonitorService(
                 .ToListAsync(cancellationToken);
 
             foreach (var tradeBot in tradeBots)
-                await EvaluateTradeBotAsync(dbContext, tradeBot, signalService, tradeService, cancellationToken);
+                await EvaluateTradeBotAsync(dbContext, tradeBot, candle.OpenTime, signalService, tradeService, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -85,6 +86,7 @@ public sealed class TradeBotMonitorService(
     private async Task EvaluateTradeBotAsync(
         ApplicationDbContext dbContext,
         Models.TradeBot tradeBot,
+        DateTimeOffset candleOpenTime,
         ITradeBotSignalService signalService,
         ITradeService tradeService,
         CancellationToken cancellationToken)
@@ -138,6 +140,30 @@ public sealed class TradeBotMonitorService(
             return;
         }
 
+        // Entry gates: a bot may only OPEN a new position when both the session window (if
+        // session-only) and its per-day risk limits allow it. These mirror the backtest engine's
+        // BacktestSimulationEngine.CanEnterToday so live and backtest gate entries identically. They
+        // gate entries only — the exits/opposite-signal closes above still run so a position opened
+        // earlier is never trapped open once the session ends or a daily limit is hit.
+        if (tradeBot.IsNySessionOnly && !BacktestSimulationEngine.IsWithinNySession(candleOpenTime))
+        {
+            logger.LogDebug(
+                "Tradebot {TradeBotId} entry suppressed: candle {CandleOpenTime:o} is outside the NY session",
+                tradeBot.Id,
+                candleOpenTime);
+            return;
+        }
+
+        var dailyLimitReason = await DailyEntryBlockReasonAsync(dbContext, tradeBot, candleOpenTime, cancellationToken);
+        if (dailyLimitReason is not null)
+        {
+            logger.LogDebug(
+                "Tradebot {TradeBotId} entry suppressed: {Reason}",
+                tradeBot.Id,
+                dailyLimitReason);
+            return;
+        }
+
         try
         {
             await tradeService.CreateAsync(
@@ -177,5 +203,50 @@ public sealed class TradeBotMonitorService(
                 tradeBot.Id,
                 tradeBot.TradingAccountId);
         }
+    }
+
+    /// <summary>
+    /// Returns a reason string when the bot has hit a per-day entry limit for the candle's Eastern
+    /// day, else null. Mirrors the daily-limit half of BacktestSimulationEngine.CanEnterToday: stats
+    /// are the account's realized (fee-adjusted) PnL and losing-trade count for trades that CLOSED on
+    /// that Eastern day. Only queried when at least one limit is configured.
+    /// </summary>
+    private async Task<string?> DailyEntryBlockReasonAsync(
+        ApplicationDbContext dbContext,
+        Models.TradeBot tradeBot,
+        DateTimeOffset candleOpenTime,
+        CancellationToken cancellationToken)
+    {
+        if (tradeBot.DailyProfitGoal is null && tradeBot.MaxLossesPerDay is null)
+            return null;
+
+        var easternDay = BacktestSimulationEngine.EasternDay(candleOpenTime);
+        // Widen the lower bound by two days so a trade closed at the very start of this Eastern day is
+        // still fetched regardless of the UTC offset / DST; the exact per-trade Eastern-day match is
+        // then done in memory to stay identical to the backtest's EasternDay(ClosedAt) grouping.
+        var since = candleOpenTime.AddDays(-2);
+
+        var closedToday = (await dbContext.Trades
+                .AsNoTracking()
+                .Where(t => t.BacktestId == null &&
+                            t.TradingAccountId == tradeBot.TradingAccountId &&
+                            t.StatusId == (int)TradeStatus.Closed &&
+                            t.ClosedAt != null &&
+                            t.ClosedAt >= since)
+                .Select(t => new { t.ClosedAt, t.Pnl })
+                .ToListAsync(cancellationToken))
+            .Where(t => BacktestSimulationEngine.EasternDay(t.ClosedAt!.Value) == easternDay)
+            .ToList();
+
+        var dailyPnl = closedToday.Sum(t => t.Pnl ?? 0m);
+        var dailyLosses = closedToday.Count(t => (t.Pnl ?? 0m) < 0);
+
+        if (tradeBot.DailyProfitGoal is decimal goal && dailyPnl >= goal)
+            return $"daily profit goal reached ({dailyPnl} >= {goal})";
+
+        if (tradeBot.MaxLossesPerDay is int maxLosses && dailyLosses >= maxLosses)
+            return $"max losses per day reached ({dailyLosses} >= {maxLosses})";
+
+        return null;
     }
 }
