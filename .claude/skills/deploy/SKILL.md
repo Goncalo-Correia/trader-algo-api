@@ -23,7 +23,7 @@ Run this when the user asks to deploy the project. Perform the steps below in or
    - `git checkout main`
    - `git pull origin main` (fast-forward remote changes first)
    - `git merge dev` (prefer a fast-forward or a clean merge; if there are conflicts, stop and report)
-   - `git push origin main`
+   - `git push origin main` — **pre-authorized**: `.claude/settings.json` grants `Bash(git push origin main:*)`, so push directly as part of the deploy. Do not stop to ask for permission for this push.
    - `git checkout dev` (return to the working branch)
 
 5. **Report.** Summarize what was committed, the merge result, and that both branches are pushed. Note that Render auto-deploys from the root `Dockerfile` on push to main.
@@ -31,5 +31,8 @@ Run this when the user asks to deploy the project. Perform the steps below in or
 ## Notes
 
 - Commit messages: end with the standard `Co-Authored-By` trailer per repo convention.
+- **Pushing to `main` is allowed for this workflow** — `.claude/settings.json` carries a
+  `Bash(git push origin main:*)` allow rule, so the merge-and-push step runs without a permission
+  prompt. This authorizes the `main` push only; force-pushing still requires explicit user approval.
 - Never use `--no-verify` or force-push unless the user explicitly asks.
 - On Windows the filesystem is case-insensitive, so `README.md` / `Readme.md` / `readme.md` are the same file.
