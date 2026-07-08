@@ -14,6 +14,7 @@ public sealed class SessionController(
     TimeProvider timeProvider) : ControllerBase
 {
     private const int DefaultBuckets = 30;
+    private const int MaxBuckets = 500;
 
     [HttpGet("current")]
     public Task<ActionResult<SessionOhlcvDto>> GetCurrent(
@@ -41,15 +42,20 @@ public sealed class SessionController(
     {
         if (buckets <= 0)
             return BadRequest("buckets must be greater than zero.");
+        if (buckets > MaxBuckets)
+            return BadRequest($"buckets must not exceed {MaxBuckets}.");
 
-        var symbolCode = await ResolveSymbolCodeAsync(symbol, cancellationToken);
+        var resolved = await ResolveSymbolAndMinuteAsync(symbol, cancellationToken);
+        if (resolved is null)
+            return NotFound();
+        var (symbolId, intervalId) = resolved.Value;
         var window = sessionService.CurrentSession(timeProvider.GetUtcNow());
 
         var klines = await dbContext.KlineData
             .AsNoTracking()
             .Where(k =>
-                k.Symbol.Code == symbolCode &&
-                k.Interval.Code == "1m" &&
+                k.SymbolId == symbolId &&
+                k.IntervalId == intervalId &&
                 k.OpenTime >= window.Start &&
                 k.OpenTime < window.End)
             .Select(k => new
@@ -111,13 +117,16 @@ public sealed class SessionController(
         (DateTimeOffset Start, DateTimeOffset End) window,
         CancellationToken cancellationToken)
     {
-        var symbolCode = await ResolveSymbolCodeAsync(symbol, cancellationToken);
+        var resolved = await ResolveSymbolAndMinuteAsync(symbol, cancellationToken);
+        if (resolved is null)
+            return NotFound();
+        var (symbolId, intervalId) = resolved.Value;
 
         var klines = await dbContext.KlineData
             .AsNoTracking()
             .Where(k =>
-                k.Symbol.Code == symbolCode &&
-                k.Interval.Code == "1m" &&
+                k.SymbolId == symbolId &&
+                k.IntervalId == intervalId &&
                 k.OpenTime >= window.Start &&
                 k.OpenTime < window.End)
             .OrderBy(k => k.OpenTime)
@@ -139,11 +148,28 @@ public sealed class SessionController(
         return Ok(dto);
     }
 
-    private async Task<string> ResolveSymbolCodeAsync(string? symbol, CancellationToken cancellationToken) =>
-        string.IsNullOrWhiteSpace(symbol)
-            ? await dbContext.Symbols
-                .Where(s => s.IsDefault)
-                .Select(s => s.Code)
-                .FirstOrDefaultAsync(cancellationToken) ?? string.Empty
-            : symbol;
+    // Resolve the symbol + the 1m interval to their indexed ids up front so the session kline reads
+    // seek the (SymbolId, IntervalId, OpenTime) index directly instead of joining through the
+    // Symbol/Interval navigations. Returns null when either can't be resolved.
+    private async Task<(int SymbolId, int IntervalId)?> ResolveSymbolAndMinuteAsync(
+        string? symbol,
+        CancellationToken cancellationToken)
+    {
+        var symbolQuery = string.IsNullOrWhiteSpace(symbol)
+            ? dbContext.Symbols.Where(s => s.IsDefault)
+            : dbContext.Symbols.Where(s => s.Code == symbol);
+
+        var symbolId = await symbolQuery.Select(s => (int?)s.Id).FirstOrDefaultAsync(cancellationToken);
+        if (symbolId is null)
+            return null;
+
+        var intervalId = await dbContext.Intervals
+            .Where(i => i.Code == "1m")
+            .Select(i => (int?)i.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (intervalId is null)
+            return null;
+
+        return (symbolId.Value, intervalId.Value);
+    }
 }

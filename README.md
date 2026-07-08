@@ -325,15 +325,20 @@ sequenceDiagram
   Note over Stream: all candles -> Completed (socket closes)
 ```
 
-**Lifecycle.** `Pending → Running → Completed` (clean socket close). Disconnecting early →
-`Cancelled`; an error → `Failed`. The linked bot is disabled on any terminal status.
+**Lifecycle.** `Pending → Running → Completed`; an error → `Failed`. The linked bot is disabled on
+any terminal status. Computation runs in a **single-flight background job** (`BacktestJobRunner`)
+decoupled from the WebSocket: the run is started at most once per backtest no matter how many
+clients attach, and a client disconnect stops only that client's replay — the run keeps going in
+the background. Once it finishes, the socket replays the persisted run; the same finished run is
+re-watchable by later clients.
 
 **Simulation rules.**
 - One trade open at a time.
 - Stop-loss is checked before take-profit; if both hit in one candle, SL wins (conservative).
 - `breakeven` moves the stop to entry (or to `breakevenStop`) once unrealised PnL hits the threshold.
 - Any trade still open at the end of the range is force-closed at the last close.
-- **Resumable:** reconnecting picks up from the last persisted progress instead of re-running everything.
+- **Resumable:** a run interrupted by host shutdown stays `Running` and picks up from the last
+  persisted progress on the next attach instead of re-running everything.
 
 ---
 
@@ -574,6 +579,7 @@ require the API key** (`/health` is the only exception) — see [Authentication]
 
 | Area | Endpoints |
 |---|---|
+| **Auth** | `POST /auth/ws-ticket` (mints a short-lived, single-use WebSocket ticket — see [Authentication](#authentication)) |
 | **Trading accounts** | `POST/GET /trading-accounts` · `GET/PATCH/DELETE /trading-accounts/{id}` |
 | **Trade bots** | `POST/GET /tradebots` · `GET/PATCH/DELETE /tradebots/{id}` · `POST /tradebots/{id}/enable` · `/disable` |
 | **Backtests** | `POST/GET /backtests` · `GET/DELETE /backtests/{id}` |
@@ -592,6 +598,9 @@ require the API key** (`/health` is the only exception) — see [Authentication]
 | **Health** | `GET /health` (checks DB connectivity; **public — no key required**) |
 
 **WebSocket endpoints**
+
+All WS endpoints authenticate with a `?ticket=` from `POST /api/auth/ws-ticket` (legacy `?apiKey=`
+still accepted) — see [Authentication](#authentication).
 
 | Endpoint | Purpose |
 |---|---|
@@ -658,11 +667,16 @@ Render can probe it). How the key is presented depends on the caller:
 | Caller | How to send the key |
 |---|---|
 | REST endpoints | `X-Api-Key: <key>` request header |
-| WebSocket streams (`/ws/...`) | `?apiKey=<key>` query parameter (browsers can't set headers on a WS handshake) |
+| WebSocket streams (`/ws/...`) | `?ticket=<ticket>` query parameter — a short-lived, single-use ticket from `POST /api/auth/ws-ticket` (browsers can't set headers on a WS handshake). The legacy `?apiKey=<key>` query parameter is still accepted as a fallback but is discouraged: it puts the long-lived key in URLs, proxy logs, and browser history. |
 | Swagger UI / document (`/swagger`) | HTTP Basic auth — any username, the key as the **password** (the browser prompts on navigation) |
 
 Inside the Swagger UI, click **Authorize** and paste the key to make the "Try it out" calls send
 the `X-Api-Key` header.
+
+**WebSocket tickets.** Call `POST /api/auth/ws-ticket` (authenticated with the `X-Api-Key` header)
+to mint a ticket; the response is `{ "ticket": "<hex>", "expiresInSeconds": 30 }`. Open the socket
+with `?ticket=<hex>` before it expires. Each ticket authenticates exactly one handshake and is
+consumed on use, so even if it leaks it is worthless almost immediately and can't be replayed.
 
 > **CORS vs. host filtering.** When the frontend is deployed, add its origin to `Cors:AllowedOrigins`
 > (the `Cors__AllowedOrigins` env var on the host, or the `Cors:AllowedOrigins` value in
@@ -686,7 +700,7 @@ committed; locally they live in user-secrets, in production they're set as envir
 
 | Variable | Required | Default | Description & options |
 |---|---|---|---|
-| `ApiKey` | **Yes** | — | API key required on every endpoint (`X-Api-Key` header / `?apiKey=` for WebSockets / Basic-auth password for Swagger). The app fails to start if it's missing. Use a long random string. See [Authentication](#authentication). |
+| `ApiKey` | **Yes** | — | API key required on every endpoint (`X-Api-Key` header for REST; a `?ticket=` from `POST /api/auth/ws-ticket` — or legacy `?apiKey=` — for WebSockets; Basic-auth password for Swagger). The app fails to start if it's missing. Use a long random string. See [Authentication](#authentication). |
 | `ConnectionStrings__Supabase` | **Yes** | — | Npgsql connection string for the main PostgreSQL database. Form: `Host=…;Port=5432;Database=postgres;Username=…;Password=…;SSL Mode=…`. **`SSL Mode`** options: `Disable`, `Allow`, `Prefer`, `Require` (encrypt, no cert validation — the default to use with Supabase), `VerifyCA`, `VerifyFull` (validate chain + hostname; needs Supabase's root CA via `Root Certificate=<path>`, since their pooler cert isn't in the public trust store). |
 | `ASPNETCORE_ENVIRONMENT` | Recommended | `Production` | .NET hosting environment. `Production` enables HTTPS redirection (non-WebSocket requests) and skips dev-only connection-pool clearing; `Development` does the opposite and is more verbose. Defaults to `Production` when unset. |
 | `Mlflow__TrackingUri` | For MLflow | falls back to `ConnectionStrings__Supabase` | Connection to the MLflow tracking database. Accepts a libpq URI (`postgresql://user:pass@host:5432/postgres?sslmode=require`) or an Npgsql keyword string. If unset, MLflow queries run against the main Supabase connection instead of the tracking schema. |

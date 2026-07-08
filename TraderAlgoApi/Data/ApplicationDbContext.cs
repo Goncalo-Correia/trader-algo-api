@@ -191,6 +191,25 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
                 .OnDelete(DeleteBehavior.Restrict);
 
             entity.HasIndex(t => new { t.SymbolId, t.StatusId });
+
+            // Keep the conventional non-unique FK index on TradingAccountId so account-scoped reads
+            // (active/history) and FK checks stay indexed — the filtered unique index below only
+            // covers open rows, so it can't serve those. The named-overload calls create separate
+            // indexes on the same column (an unnamed HasIndex(col) would just reconfigure this one).
+            entity.HasIndex(t => t.TradingAccountId);
+
+            // DB-enforced "one open live position" invariant, closing the check-then-insert race in
+            // TradeService.CreateAsync. Live trades are those with BacktestId IS NULL; open means
+            // Pending(1) or Active(2). Account-bound trades are unique per account; account-less
+            // trades are unique per symbol — matching the two branches of the CreateAsync pre-check.
+            // (Backtest trades are excluded, so simulations can still hold many concurrent trades.)
+            entity.HasIndex(t => t.TradingAccountId, "IX_trades_open_live_account_unique")
+                .IsUnique()
+                .HasFilter("\"BacktestId\" IS NULL AND \"TradingAccountId\" IS NOT NULL AND (\"StatusId\" = 1 OR \"StatusId\" = 2)");
+
+            entity.HasIndex(t => t.SymbolId, "IX_trades_open_live_symbol_unique")
+                .IsUnique()
+                .HasFilter("\"BacktestId\" IS NULL AND \"TradingAccountId\" IS NULL AND (\"StatusId\" = 1 OR \"StatusId\" = 2)");
         });
 
         // -------------------------------------------------------------------

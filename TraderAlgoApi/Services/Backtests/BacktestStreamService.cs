@@ -30,6 +30,7 @@ public sealed class BacktestStreamService(
     MacdTradingRule macdTradingRule,
     SmaMacdTradingRule smaMacdTradingRule,
     IMlConnectorService mlConnector,
+    BacktestJobRunner jobRunner,
     TimeProvider timeProvider,
     ILogger<BacktestStreamService> logger) : IBacktestStreamService
 {
@@ -66,16 +67,11 @@ public sealed class BacktestStreamService(
             return;
         }
 
-        // Own a context for the lifetime of this run instead of piggybacking the request scope's
+        // Own a context for the lifetime of this stream instead of piggybacking the request scope's
         // shared, long-lived DbContext.
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-        var backtest = await dbContext.Backtests
-            .Include(b => b.Symbol)
-            .Include(b => b.Interval)
-            .Include(b => b.TradeBot)
-                .ThenInclude(tb => tb!.MlPolicy)
-            .FirstOrDefaultAsync(b => b.Id == backtestId, cancellationToken);
+        var backtest = await LoadBacktestAsync(dbContext, backtestId, cancellationToken);
 
         if (backtest is null)
         {
@@ -101,24 +97,32 @@ public sealed class BacktestStreamService(
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, disconnectCts.Token);
         var monitorTask = MonitorClientAsync(clientSocket, disconnectCts, linked.Token);
 
-        var computing = false;
         try
         {
             if ((BacktestStatus)backtest.StatusId is BacktestStatus.Pending or BacktestStatus.Running)
             {
-                computing = true;
-                backtest.StatusId = (int)BacktestStatus.Running;
-                await dbContext.SaveChangesAsync(cancellationToken);
+                // Hand computation to the single-flight background runner: it computes each backtest
+                // at most once regardless of how many clients attach, on a task tied to the app
+                // lifetime rather than this socket. We await completion, but a client disconnect
+                // cancels only this wait (via linked) — the run keeps going in the background.
+                var job = jobRunner.EnsureRunAsync(backtestId);
+                await job.WaitAsync(linked.Token);
 
-                await ComputeAsync(dbContext, backtest, linked.Token);
-
-                backtest.StatusId = (int)BacktestStatus.Completed;
-                backtest.CompletedAt = timeProvider.GetUtcNow();
-                await dbContext.SaveChangesAsync(CancellationToken.None);
-                computing = false;
+                // Pick up the terminal state the job persisted from our own context.
+                await dbContext.Entry(backtest).ReloadAsync(cancellationToken);
             }
 
-            await ReplayAsync(dbContext, clientSocket, backtest, delay, linked.Token);
+            if ((BacktestStatus)backtest.StatusId is BacktestStatus.Completed)
+            {
+                await ReplayAsync(dbContext, clientSocket, backtest, delay, linked.Token);
+            }
+            else if (clientSocket.State == WebSocketState.Open)
+            {
+                // The run ended without completing (failed, or cancelled by host shutdown). Tell the
+                // client so it can decide whether to retry rather than silently closing as "done".
+                await SendMessageAsync(clientSocket, "backtestStatus",
+                    new { status = ((BacktestStatus)backtest.StatusId).ToString() }, CancellationToken.None);
+            }
 
             if (clientSocket.State == WebSocketState.Open)
             {
@@ -130,46 +134,83 @@ public sealed class BacktestStreamService(
         }
         catch (OperationCanceledException) when (disconnectCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            logger.LogInformation("Backtest {Id} stream stopped: client disconnected", backtest.Id);
-            if (computing)
-            {
-                backtest.StatusId = (int)BacktestStatus.Cancelled;
-                backtest.CompletedAt = timeProvider.GetUtcNow();
-                await dbContext.SaveChangesAsync(CancellationToken.None);
-            }
+            logger.LogInformation(
+                "Backtest {Id} stream stopped: client disconnected (computation continues in background)", backtest.Id);
         }
         catch (OperationCanceledException)
         {
-            if (computing)
-            {
-                backtest.StatusId = (int)BacktestStatus.Cancelled;
-                backtest.CompletedAt = timeProvider.GetUtcNow();
-                await dbContext.SaveChangesAsync(CancellationToken.None);
-            }
+            // Host shutdown; nothing to persist here — the background job manages its own status.
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Backtest {Id} stream failed", backtest.Id);
-            if (computing)
-            {
-                backtest.StatusId = (int)BacktestStatus.Failed;
-                backtest.CompletedAt = timeProvider.GetUtcNow();
-                await dbContext.SaveChangesAsync(CancellationToken.None);
-            }
         }
         finally
         {
             await monitorTask;
-            await DisableLinkedTradeBotAsync(dbContext, backtest.Id);
         }
     }
 
     // -------------------------------------------------------------------------
-    // Compute: run the simulation to completion, persisting trades and progress.
-    // No socket involvement — a fast run no longer pays any streaming overhead.
+    // Compute: run (or resume) the simulation to a terminal state, persisting trades and progress.
+    // No socket involvement — owns its own context and lifecycle, invoked by BacktestJobRunner.
     // -------------------------------------------------------------------------
 
-    private async Task ComputeAsync(
+    public async Task ComputeAsync(long backtestId, CancellationToken cancellationToken = default)
+    {
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        var backtest = await LoadBacktestAsync(dbContext, backtestId, cancellationToken);
+        if (backtest is null)
+            return;
+
+        // Only Pending or (crashed/partial) Running runs are computable; anything terminal is a no-op
+        // so a client attaching to an already-finished run doesn't re-run it.
+        if ((BacktestStatus)backtest.StatusId is not (BacktestStatus.Pending or BacktestStatus.Running))
+            return;
+
+        try
+        {
+            backtest.StatusId = (int)BacktestStatus.Running;
+            await dbContext.SaveChangesAsync(cancellationToken);
+
+            await RunSimulationAsync(dbContext, backtest, cancellationToken);
+
+            backtest.StatusId = (int)BacktestStatus.Completed;
+            backtest.CompletedAt = timeProvider.GetUtcNow();
+            await dbContext.SaveChangesAsync(CancellationToken.None);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Host shutdown: leave the run Running (with its persisted progress) so it resumes later.
+            logger.LogInformation("Backtest {Id} compute paused (host stopping); will resume from progress.", backtestId);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Backtest {Id} compute failed", backtestId);
+            backtest.StatusId = (int)BacktestStatus.Failed;
+            backtest.CompletedAt = timeProvider.GetUtcNow();
+            await dbContext.SaveChangesAsync(CancellationToken.None);
+        }
+        finally
+        {
+            await DisableLinkedTradeBotAsync(dbContext, backtestId);
+        }
+    }
+
+    private static Task<Backtest?> LoadBacktestAsync(
+        ApplicationDbContext dbContext,
+        long backtestId,
+        CancellationToken cancellationToken) =>
+        dbContext.Backtests
+            .Include(b => b.Symbol)
+            .Include(b => b.Interval)
+            .Include(b => b.TradeBot)
+                .ThenInclude(tb => tb!.MlPolicy)
+            .FirstOrDefaultAsync(b => b.Id == backtestId, cancellationToken);
+
+    private async Task RunSimulationAsync(
         ApplicationDbContext dbContext,
         Backtest backtest,
         CancellationToken cancellationToken)

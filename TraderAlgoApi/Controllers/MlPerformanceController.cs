@@ -16,6 +16,11 @@ namespace TraderAlgoApi.Controllers;
 [Route("api/ml")]
 public sealed class MlPerformanceController(ApplicationDbContext dbContext) : ControllerBase
 {
+    // Page-size / list bounds so a caller can't request an unbounded slice (or pass negative
+    // Take/Skip values that would fault the provider).
+    private const int MaxPageSize = 10_000;
+    private const int MaxPolicyRuns = 500;
+
     /// <summary>Run summary: status, scheme, promotion/gate result, headline in-sample vs OOS.</summary>
     [HttpGet("training-runs/{runId:long}/performance")]
     public async Task<ActionResult<RunPerformanceResponse>> GetRunPerformance(
@@ -126,6 +131,9 @@ public sealed class MlPerformanceController(ApplicationDbContext dbContext) : Co
         [FromQuery] int offset = 0,
         CancellationToken cancellationToken = default)
     {
+        limit = Math.Clamp(limit, 1, MaxPageSize);
+        offset = Math.Max(offset, 0);
+
         var key = runId.ToString();
         var resolved = stitched ? "stitched" : split;
 
@@ -155,6 +163,9 @@ public sealed class MlPerformanceController(ApplicationDbContext dbContext) : Co
         [FromQuery] int offset = 0,
         CancellationToken cancellationToken = default)
     {
+        limit = Math.Clamp(limit, 1, MaxPageSize);
+        offset = Math.Max(offset, 0);
+
         var key = runId.ToString();
         var baseQuery = dbContext.TrainingTrades
             .AsNoTracking()
@@ -228,6 +239,7 @@ public sealed class MlPerformanceController(ApplicationDbContext dbContext) : Co
             .AsNoTracking()
             .Where(r => r.MlPolicyId == policyId)
             .OrderByDescending(r => r.CreatedAt)
+            .Take(MaxPolicyRuns)
             .ToListAsync(cancellationToken);
 
         return Ok(rows.Select(ToDto).ToList());

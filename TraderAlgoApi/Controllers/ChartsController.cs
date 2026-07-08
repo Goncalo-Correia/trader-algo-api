@@ -10,6 +10,11 @@ namespace TraderAlgoApi.Controllers;
 public sealed class ChartsController(ApplicationDbContext dbContext) : ControllerBase
 {
     private const int DefaultLookback = 100;
+    // Upper bound on how many candles a single read can pull back, so an arbitrarily large
+    // `lookback` (or a wide date range) can't materialise a runaway result set. Negative/zero
+    // values are clamped up to 1.
+    private const int MaxLookback = 5_000;
+    private const int MaxDateIntervalCandles = 50_000;
 
     [HttpGet("candles")]
     public async Task<ActionResult<IReadOnlyList<CandleResponseDto>>> GetCandles(
@@ -18,6 +23,7 @@ public sealed class ChartsController(ApplicationDbContext dbContext) : Controlle
         [FromQuery] int lookback = DefaultLookback,
         CancellationToken cancellationToken = default)
     {
+        lookback = Math.Clamp(lookback, 1, MaxLookback);
         var symbolId = await ResolveSymbolIdAsync(symbol, cancellationToken);
         var intervalId = await ResolveIntervalIdAsync(interval, cancellationToken);
         if (symbolId is null || intervalId is null)
@@ -50,6 +56,7 @@ public sealed class ChartsController(ApplicationDbContext dbContext) : Controlle
         [FromQuery] int lookback = DefaultLookback,
         CancellationToken cancellationToken = default)
     {
+        lookback = Math.Clamp(lookback, 1, MaxLookback);
         var symbolId = await ResolveSymbolIdAsync(symbol, cancellationToken);
         var intervalId = await ResolveIntervalIdAsync(interval, cancellationToken);
         if (symbolId is null || intervalId is null)
@@ -106,6 +113,9 @@ public sealed class ChartsController(ApplicationDbContext dbContext) : Controlle
         if (symbolId is null || intervalId is null)
             return Ok(Array.Empty<CandleWithIndicatorsResponseDto>());
 
+        // Cap the window at the most-recent MaxDateIntervalCandles within [from, to] so an
+        // over-wide range (e.g. years of 1m candles) can't materialise millions of rows. We take
+        // from the newest end and re-order ascending for chart rendering.
         var candles = await dbContext.KlineData
             .AsNoTracking()
             .Where(kline =>
@@ -113,6 +123,8 @@ public sealed class ChartsController(ApplicationDbContext dbContext) : Controlle
                 kline.IntervalId == intervalId.Value &&
                 kline.OpenTime >= fromInstant &&
                 kline.OpenTime <= toInstant)
+            .OrderByDescending(kline => kline.OpenTime)
+            .Take(MaxDateIntervalCandles)
             .OrderBy(kline => kline.OpenTime)
             .Select(kline => new CandleWithIndicatorsResponseDto(
                 kline.OpenTime.ToUnixTimeSeconds(),

@@ -11,6 +11,10 @@ public sealed class BacktestService(
     ApplicationDbContext dbContext,
     TimeProvider timeProvider) : IBacktestService
 {
+    // The list endpoint recomputes an equity curve per backtest from its closed trades, so cap the
+    // number of backtests summarised in one call (most-recent first) to bound memory and DB work.
+    private const int MaxBacktestsListed = 500;
+
     public async Task<BacktestSummaryResponseDto> CreateAsync(
         CreateBacktestRequestDto request,
         CancellationToken cancellationToken = default)
@@ -115,6 +119,7 @@ public sealed class BacktestService(
         var rows = await dbContext.Backtests
             .AsNoTracking()
             .OrderByDescending(b => b.StartedAt)
+            .Take(MaxBacktestsListed)
             .Select(b => new
             {
                 Backtest     = b,

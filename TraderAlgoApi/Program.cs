@@ -90,6 +90,10 @@ builder.Services.AddDbContextFactory<MlflowDbContext>(ConfigureDb, ServiceLifeti
 
 builder.Services.AddSingleton(TimeProvider.System);
 
+// Mints short-lived single-use tickets so browser WebSocket handshakes don't put the API key in the
+// query string. See Infrastructure/WebSocketTicketService and POST /api/auth/ws-ticket.
+builder.Services.AddSingleton<WebSocketTicketService>();
+
 // ── Health checks ───────────────────────────────────────────────────────────────
 builder.Services.AddHealthChecks()
     .AddCheck<DatabaseHealthCheck>("database");
@@ -115,6 +119,8 @@ builder.Services.AddSingleton<SmaMacdTradingRule>();
 // ── Domain services ───────────────────────────────────────────────────────────
 builder.Services.AddScoped<IBacktestService, BacktestService>();
 builder.Services.AddScoped<IBacktestStreamService, BacktestStreamService>();
+// Single-flight background runner for backtest computation (decoupled from WebSocket clients).
+builder.Services.AddSingleton<BacktestJobRunner>();
 builder.Services.AddScoped<ITradeBotService, TradeBotService>();
 builder.Services.AddScoped<ITradeBotSignalService, TradeBotSignalService>();
 builder.Services.AddScoped<ITradeEventStreamService, TradeEventStreamService>();
@@ -155,7 +161,9 @@ builder.Services.AddHttpClient("Kronos", client =>
     var baseUrl = builder.Configuration["Kronos:BaseUrl"] ?? "http://localhost:8765";
     client.BaseAddress = new Uri(baseUrl.TrimEnd());
     client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
-});
+})
+// /predict is a stateless forecast (no side effects), so retry/backoff + circuit breaking are safe.
+.AddOutboundResilience();
 builder.Services.AddScoped<IKronosConnectorService, KronosConnectorService>();
 builder.Services.AddScoped<IKronosPredictService, KronosPredictService>();
 
@@ -165,6 +173,11 @@ builder.Services.AddHttpClient("MlPolicy", client =>
     var baseUrl = builder.Configuration["MlPolicy:BaseUrl"] ?? "http://localhost:8766";
     client.BaseAddress = new Uri(baseUrl);
     client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+
+    // A plain request timeout (no retry handler): this client also serves the non-idempotent
+    // /train endpoint, so an automatic retry could kick off a duplicate training run. The timeout
+    // still bounds how long a hung sidecar can tie up a decide/train/models call.
+    client.Timeout = TimeSpan.FromSeconds(120);
 
     // The ML sidecar gates every endpoint except /health behind an X-API-Key header when it is
     // configured with an API key (required when it is publicly reachable). Send the shared secret
@@ -209,7 +222,8 @@ if (!app.Environment.IsDevelopment())
 
 app.UseCors(ApiCorsPolicy);
 
-// Require the API key on all endpoints (REST via X-Api-Key, WebSockets via ?apiKey=). Placed
+// Require the API key on all endpoints: REST via the X-Api-Key header; WebSockets via a short-lived
+// single-use ?ticket= (from POST /api/auth/ws-ticket), with legacy ?apiKey= still accepted. Placed
 // after CORS so the policy's headers are applied to 401 responses and preflight is handled first.
 app.UseApiKeyAuthentication();
 

@@ -15,23 +15,29 @@ public sealed class KronosPredictService(
         KronosPredictOptions options,
         CancellationToken cancellationToken = default)
     {
-        var symbolCode = string.IsNullOrWhiteSpace(symbol)
-            ? await dbContext.Symbols
-                .Where(s => s.IsDefault)
-                .Select(s => s.Code)
-                .FirstOrDefaultAsync(cancellationToken) ?? string.Empty
-            : symbol;
+        // Resolve the symbol (id + code) and interval id up front so the "latest N candles" read
+        // seeks the (SymbolId, IntervalId, OpenTime) index directly rather than joining through the
+        // Symbol/Interval navigations. The code is still needed for the Kronos request payload.
+        var symbolQuery = string.IsNullOrWhiteSpace(symbol)
+            ? dbContext.Symbols.Where(s => s.IsDefault)
+            : dbContext.Symbols.Where(s => s.Code == symbol);
+        var resolvedSymbol = await symbolQuery
+            .Select(s => new { s.Id, s.Code })
+            .FirstOrDefaultAsync(cancellationToken);
 
-        var intervalCode = string.IsNullOrWhiteSpace(interval)
-            ? await dbContext.Intervals
-                .Where(i => i.IsDefault)
-                .Select(i => i.Code)
-                .FirstOrDefaultAsync(cancellationToken) ?? string.Empty
-            : interval;
+        var intervalQuery = string.IsNullOrWhiteSpace(interval)
+            ? dbContext.Intervals.Where(i => i.IsDefault)
+            : dbContext.Intervals.Where(i => i.Code == interval);
+        var intervalId = await intervalQuery
+            .Select(i => (int?)i.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (resolvedSymbol is null || intervalId is null)
+            return [];
 
         var candles = await dbContext.KlineData
             .AsNoTracking()
-            .Where(k => k.Symbol.Code == symbolCode && k.Interval.Code == intervalCode)
+            .Where(k => k.SymbolId == resolvedSymbol.Id && k.IntervalId == intervalId.Value)
             .OrderByDescending(k => k.OpenTime)
             .Take(options.Lookback)
             .OrderBy(k => k.OpenTime)
@@ -39,7 +45,7 @@ public sealed class KronosPredictService(
             .ToListAsync(cancellationToken);
 
         var request = new KronosPredictRequest(
-            Symbol: symbolCode,
+            Symbol: resolvedSymbol.Code,
             ModelId: options.ModelId,
             Candles: candles,
             PredLen: options.PredLen,

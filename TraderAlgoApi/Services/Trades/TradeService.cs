@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using TraderAlgoApi.Data;
 using TraderAlgoApi.Dtos.Trades;
 using TraderAlgoApi.Dtos.TradeEvents;
@@ -16,6 +17,10 @@ public sealed class TradeService(
     ITradeEventPublisher tradeEventPublisher,
     ILogger<TradeService> logger) : ITradeService
 {
+    // Upper bounds on unbounded history reads so a large table can't produce a runaway payload.
+    private const int MaxHistoryTrades  = 2_000;
+    private const int MaxBacktestTrades = 20_000;
+
     public async Task<TradeResponseDto> CreateAsync(
         CreateTradeRequestDto request,
         CancellationToken cancellationToken = default)
@@ -113,7 +118,20 @@ public sealed class TradeService(
         }
 
         dbContext.Trades.Add(trade);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+        {
+            // The pre-check above is racy; the filtered unique index on open live trades is the real
+            // guard. A concurrent create that slipped past the check trips it here — surface the same
+            // "already open" error rather than a raw DB fault.
+            throw new InvalidOperationException(
+                request.TradingAccountId is long blockedAccountId
+                    ? $"A pending or active trade already exists for trading account {blockedAccountId}. Close it before opening a new one."
+                    : $"A pending or active trade already exists for {request.SymbolCode}. Close it before opening a new one.");
+        }
 
         logger.LogInformation(
             "Trade {Id} created: {Symbol} {Side} {OrderType} qty={Quantity} accountId={AccountId}",
@@ -139,7 +157,10 @@ public sealed class TradeService(
         TradeCloseReason closeReason,
         CancellationToken cancellationToken = default)
     {
+        // AsNoTracking: the close is persisted with a guarded atomic UPDATE below, not via the change
+        // tracker, so we only need this read for validation, pricing, and the response DTO.
         var trade = await TradeWithNavigations()
+            .AsNoTracking()
             .FirstOrDefaultAsync(t => t.Id == id, cancellationToken)
             ?? throw new KeyNotFoundException($"Trade {id} not found.");
 
@@ -149,15 +170,36 @@ public sealed class TradeService(
 
         var price = await ResolveCurrentPriceAsync(trade.Symbol.Code, cancellationToken);
         var now   = timeProvider.GetUtcNow();
+        var pnl   = CalculatePnl(trade, price);
 
+        // Flip Active→Closed and apply the account PnL atomically. The UPDATE is guarded on the row
+        // still being Active, so if a tick-trigger close (EvaluatePriceAsync) races this one only a
+        // single writer wins and the realized PnL is applied exactly once.
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+        var closed = await dbContext.Trades
+            .Where(t => t.Id == id && t.StatusId == (int)TradeStatus.Active)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(t => t.StatusId, (int)TradeStatus.Closed)
+                .SetProperty(t => t.ClosedAt, now)
+                .SetProperty(t => t.ClosedPrice, price)
+                .SetProperty(t => t.CloseReasonId, (int)closeReason)
+                .SetProperty(t => t.Pnl, pnl),
+                cancellationToken);
+
+        if (closed == 0)
+            throw new InvalidOperationException(
+                $"Trade {id} cannot be stopped: it is no longer active.");
+
+        await ApplyPnlToAccountAsync(trade.TradingAccountId, pnl, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+
+        // Mirror the persisted transition onto the in-memory copy for the response DTO / event.
         trade.StatusId      = (int)TradeStatus.Closed;
         trade.ClosedAt      = now;
         trade.ClosedPrice   = price;
         trade.CloseReasonId = (int)closeReason;
-        trade.Pnl           = CalculatePnl(trade, price);
-
-        await ApplyPnlToAccountAsync(trade, cancellationToken);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        trade.Pnl           = pnl;
 
         logger.LogInformation("Trade {Id} closed with {Reason} at {Price} pnl={Pnl}", id, closeReason, price, trade.Pnl);
 
@@ -209,12 +251,15 @@ public sealed class TradeService(
         long tradingAccountId,
         CancellationToken cancellationToken = default)
     {
+        // Cap the result so an account with a very long history can't produce an unbounded payload;
+        // most-recent-first, so the cap keeps the rows a UI actually shows.
         var trades = await TradeWithNavigations()
             .AsNoTracking()
             .Where(t => t.BacktestId == null &&
                         t.TradingAccountId == tradingAccountId &&
                         (t.StatusId == (int)TradeStatus.Closed || t.StatusId == (int)TradeStatus.Cancelled))
             .OrderByDescending(t => t.ClosedAt)
+            .Take(MaxHistoryTrades)
             .ToListAsync(cancellationToken);
 
         return trades.Select(ToDto).ToList();
@@ -224,10 +269,13 @@ public sealed class TradeService(
         long backtestId,
         CancellationToken cancellationToken = default)
     {
+        // Defensive upper bound: a backtest's trade count is bounded by its run, but a pathological
+        // run shouldn't be able to stream an unbounded list back through this reconciliation read.
         var trades = await TradeWithNavigations()
             .AsNoTracking()
             .Where(t => t.BacktestId == backtestId)
             .OrderBy(t => t.CreatedAt)
+            .Take(MaxBacktestTrades)
             .ToListAsync(cancellationToken);
 
         return trades.Select(ToDto).ToList();
@@ -238,10 +286,21 @@ public sealed class TradeService(
         decimal price,
         CancellationToken cancellationToken = default)
     {
-        // No Include needed — ToDto is not called here.
+        // Resolve the symbol to its indexed id first so the open-trades query can seek the
+        // (SymbolId, StatusId) index directly instead of joining through the Symbol navigation.
+        var symbolId = await dbContext.Symbols
+            .Where(s => s.Code == symbol)
+            .Select(s => (int?)s.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (symbolId is null)
+            return;
+
+        // AsNoTracking + guarded UPDATEs: each transition is persisted with an atomic UPDATE below,
+        // so we never write these entities back through the change tracker.
         var trades = await dbContext.Trades
+            .AsNoTracking()
             .Where(t => t.BacktestId == null &&
-                        t.Symbol.Code == symbol &&
+                        t.SymbolId == symbolId.Value &&
                         (t.StatusId == (int)TradeStatus.Pending || t.StatusId == (int)TradeStatus.Active))
             .ToListAsync(cancellationToken);
 
@@ -249,49 +308,72 @@ public sealed class TradeService(
             return;
 
         var now     = timeProvider.GetUtcNow();
-        var changed = false;
         var tradeEvents = new List<(long TradeId, string Type, string Message)>();
 
         foreach (var trade in trades)
         {
-            var previousStatusId = trade.StatusId;
-            var wasChanged = previousStatusId == (int)TradeStatus.Pending
-                ? TryFillLimit(trade, price, now)
-                : TryTriggerSLTP(trade, price, now);
-
-            if (wasChanged && trade.StatusId == (int)TradeStatus.Closed)
+            if (trade.StatusId == (int)TradeStatus.Pending)
             {
-                await ApplyPnlToAccountAsync(trade, cancellationToken);
-                tradeEvents.Add((trade.Id, "TradeClosed", "Trade closed by price trigger."));
-            }
-
-            if (wasChanged &&
-                previousStatusId == (int)TradeStatus.Pending &&
-                trade.StatusId == (int)TradeStatus.Active)
-            {
-                tradeEvents.Add((trade.Id, "TradeOpened", "Pending trade filled."));
-            }
-
-            changed |= wasChanged;
-        }
-
-        if (changed)
-        {
-            await dbContext.SaveChangesAsync(cancellationToken);
-
-            var changedIds = tradeEvents.Select(e => e.TradeId).Distinct().ToList();
-            var changedTrades = await TradeWithNavigations()
-                .AsNoTracking()
-                .Where(t => changedIds.Contains(t.Id))
-                .ToDictionaryAsync(t => t.Id, cancellationToken);
-
-            foreach (var tradeEvent in tradeEvents)
-            {
-                if (!changedTrades.TryGetValue(tradeEvent.TradeId, out var trade))
+                if (!TryFillLimit(trade, price, now))
                     continue;
 
-                PublishTradeEvent(tradeEvent.Type, ToDto(trade), tradeEvent.Message);
+                // Guarded Pending→Active fill: no-op if another writer already filled or cancelled it.
+                var filled = await dbContext.Trades
+                    .Where(t => t.Id == trade.Id && t.StatusId == (int)TradeStatus.Pending)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(t => t.StatusId, (int)TradeStatus.Active)
+                        .SetProperty(t => t.EntryPrice, trade.EntryPrice)
+                        .SetProperty(t => t.OpenedAt, trade.OpenedAt),
+                        cancellationToken);
+
+                if (filled > 0)
+                    tradeEvents.Add((trade.Id, "TradeOpened", "Pending trade filled."));
             }
+            else
+            {
+                if (!TryTriggerSLTP(trade, price, now))
+                    continue;
+
+                // Guarded Active→Closed transition + atomic account PnL. If a manual close or another
+                // tick already closed this trade, the UPDATE matches no row and we apply no PnL.
+                await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+                var closed = await dbContext.Trades
+                    .Where(t => t.Id == trade.Id && t.StatusId == (int)TradeStatus.Active)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(t => t.StatusId, (int)TradeStatus.Closed)
+                        .SetProperty(t => t.ClosedAt, trade.ClosedAt)
+                        .SetProperty(t => t.ClosedPrice, trade.ClosedPrice)
+                        .SetProperty(t => t.CloseReasonId, trade.CloseReasonId)
+                        .SetProperty(t => t.Pnl, trade.Pnl),
+                        cancellationToken);
+
+                if (closed > 0)
+                {
+                    await ApplyPnlToAccountAsync(trade.TradingAccountId, trade.Pnl, cancellationToken);
+                    await transaction.CommitAsync(cancellationToken);
+                    tradeEvents.Add((trade.Id, "TradeClosed", "Trade closed by price trigger."));
+                }
+                else
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                }
+            }
+        }
+
+        if (tradeEvents.Count == 0)
+            return;
+
+        var changedIds = tradeEvents.Select(e => e.TradeId).Distinct().ToList();
+        var changedTrades = await TradeWithNavigations()
+            .AsNoTracking()
+            .Where(t => changedIds.Contains(t.Id))
+            .ToDictionaryAsync(t => t.Id, cancellationToken);
+
+        foreach (var tradeEvent in tradeEvents)
+        {
+            if (changedTrades.TryGetValue(tradeEvent.TradeId, out var trade))
+                PublishTradeEvent(tradeEvent.Type, ToDto(trade), tradeEvent.Message);
         }
     }
 
@@ -378,23 +460,24 @@ public sealed class TradeService(
         return true;
     }
 
-    /// <summary>Adds realized P&amp;L to the linked account's CurrentBalance, if any.</summary>
-    private async Task ApplyPnlToAccountAsync(Trade trade, CancellationToken cancellationToken)
+    /// <summary>
+    /// Adds realized P&amp;L to the linked account's CurrentBalance via an atomic in-database
+    /// increment, so concurrent closes can't lose an update the way a tracked read-modify-write
+    /// would. Callers run this inside the same transaction as the guarded trade close.
+    /// </summary>
+    private async Task ApplyPnlToAccountAsync(long? tradingAccountId, decimal? pnl, CancellationToken cancellationToken)
     {
-        if (trade.TradingAccountId is null || trade.Pnl is null)
+        if (tradingAccountId is not long accountId || pnl is not decimal delta)
             return;
 
-        var account = await dbContext.TradingAccounts
-            .FirstOrDefaultAsync(a => a.Id == trade.TradingAccountId.Value, cancellationToken);
+        var rows = await dbContext.TradingAccounts
+            .Where(a => a.Id == accountId)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(a => a.CurrentBalance, a => a.CurrentBalance + delta),
+                cancellationToken);
 
-        if (account is null)
-            return;
-
-        account.CurrentBalance += trade.Pnl.Value;
-
-        logger.LogInformation(
-            "Account {AccountId} CurrentBalance updated by {Pnl} → {CurrentBalance}",
-            account.Id, trade.Pnl.Value, account.CurrentBalance);
+        if (rows > 0)
+            logger.LogInformation("Account {AccountId} CurrentBalance incremented by {Pnl}", accountId, delta);
     }
 
     private async Task<decimal> ResolveCurrentPriceAsync(string symbol, CancellationToken cancellationToken)

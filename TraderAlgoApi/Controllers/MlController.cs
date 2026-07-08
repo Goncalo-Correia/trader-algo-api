@@ -17,6 +17,8 @@ public sealed class MlController(
     TimeProvider timeProvider,
     ILogger<MlController> logger) : ControllerBase
 {
+    private const int MaxTrainingRunsListed = 500;
+
     [HttpPost("train")]
     public async Task<ActionResult<MlTrainStartedResponse>> Train(
         [FromBody] MlStartTrainingRequest request,
@@ -90,8 +92,11 @@ public sealed class MlController(
         if (mlPolicyId is long policyId)
             query = query.Where(r => r.MlPolicyId == policyId);
 
+        // Cap the run list (most-recent first): every returned run also triggers an MLflow tracking
+        // lookup, so an unbounded list would fan out into an unbounded number of tracking queries.
         var runs = await query
             .OrderByDescending(r => r.StartedAt)
+            .Take(MaxTrainingRunsListed)
             .ToListAsync(cancellationToken);
 
         var tracking = await mlflowTrackingRepository.GetTrackingSummariesAsync(

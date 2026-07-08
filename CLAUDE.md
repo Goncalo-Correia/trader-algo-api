@@ -46,7 +46,18 @@ in-process background-job queue one at a time). WebSocket streams also subscribe
 **WebSockets are separate from controllers.** REST is attribute-routed controllers under
 `Controllers/`; live streams are minimal-API `MapGet` handlers in
 [WebSockets/WebSocketEndpoints.cs](TraderAlgoApi/WebSockets/WebSocketEndpoints.cs), each delegating to
-a `*StreamService`. They're `.ExcludeFromDescription()`'d (hidden from Swagger).
+a `*StreamService`. They're `.ExcludeFromDescription()`'d (hidden from Swagger). WS handshakes can't
+send the `X-Api-Key` header, so they authenticate with a short-lived single-use `?ticket=` minted by
+`POST /api/auth/ws-ticket` ([WebSocketTicketService](TraderAlgoApi/Infrastructure/WebSocketTicketService.cs));
+legacy `?apiKey=` is still accepted as a fallback.
+
+**Backtest compute is a single-flight background job, not the socket.** `BacktestStreamService`
+still owns the compute/replay split, but computation runs via
+[BacktestJobRunner](TraderAlgoApi/Services/Backtests/BacktestJobRunner.cs) (singleton) on a task tied
+to the app lifetime — started at most once per backtest id regardless of how many clients attach, so
+a client disconnect stops only that client's replay, never the run. `ComputeAsync(backtestId, ct)` is
+the detached entrypoint (own `DbContext`); the socket handler awaits the shared job then replays the
+persisted run. A run interrupted by host shutdown stays `Running` and resumes from persisted progress.
 
 **Market clock (two implementations — mind the difference).** Session-hours logic exists in two
 places: `NyseSessionService` (stateless singleton) backs the `/api/session/*` aggregate endpoints and
@@ -117,9 +128,13 @@ wired in [Infrastructure/MarketDataServiceCollectionExtensions.cs](TraderAlgoApi
 via `AddMarketDataProviders`. Keep new provider code behind that abstraction.
 
 **Cross-cutting infrastructure** ([Infrastructure/](TraderAlgoApi/Infrastructure)):
-`ApiKeyAuthentication` (middleware enforcing the key on all endpoints except `/health`; Swagger is
-gated by a Basic-auth variant), `GlobalExceptionHandler` (RFC 7807 ProblemDetails for everything
-uncaught — return typed errors, don't hand-roll error bodies), `DatabaseHealthCheck`.
+`ApiKeyAuthentication` (middleware enforcing the key on all endpoints except `/health`; REST via
+`X-Api-Key`, WS via a single-use `?ticket=` with legacy `?apiKey=` fallback; Swagger is gated by a
+Basic-auth variant), `GlobalExceptionHandler` (RFC 7807 ProblemDetails for everything uncaught —
+return typed errors, don't hand-roll error bodies), `DatabaseHealthCheck`. Outbound named HTTP
+clients (Binance, Kronos) get retry/backoff/timeout/circuit-breaker via
+[HttpResilienceExtensions](TraderAlgoApi/Infrastructure/HttpResilienceExtensions.cs); the ML Policy
+client gets a plain timeout only (its `/train` POST is non-idempotent, so it must not be retried).
 
 **Indicators** (`SimpleMovingAverage`, `RelativeStrengthIndex`, `Macd`, `Atr`) are one-to-one side
 tables keyed on `KlineData.Id` (cascade delete), recomputed incrementally whenever a candle is

@@ -14,6 +14,7 @@ public static class ApiKeyAuthentication
 {
     private const string HeaderName = "X-Api-Key";
     private const string QueryName = "apiKey";
+    private const string TicketQueryName = "ticket";
 
     /// <summary>Reads the configured key, failing fast at startup if it is missing.</summary>
     public static string GetRequiredApiKey(this IConfiguration configuration) =>
@@ -41,11 +42,15 @@ public static class ApiKeyAuthentication
                 return;
             }
 
-            var supplied = context.WebSockets.IsWebSocketRequest
-                ? context.Request.Query[QueryName].ToString()
-                : context.Request.Headers[HeaderName].ToString();
+            // WebSocket upgrades can't carry the X-Api-Key header, so they authenticate with a
+            // short-lived single-use ticket (?ticket=), obtained from POST /api/auth/ws-ticket.
+            // The legacy ?apiKey= query is still accepted as a fallback for un-migrated clients, but
+            // it leaks the long-lived key into logs/history — prefer a ticket.
+            var authorized = context.WebSockets.IsWebSocketRequest
+                ? AuthorizeWebSocket(context, apiKey)
+                : KeysMatch(context.Request.Headers[HeaderName].ToString(), apiKey);
 
-            if (!KeysMatch(supplied, apiKey))
+            if (!authorized)
             {
                 context.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 return;
@@ -53,6 +58,16 @@ public static class ApiKeyAuthentication
 
             await next();
         });
+    }
+
+    private static bool AuthorizeWebSocket(HttpContext context, string apiKey)
+    {
+        var ticketService = context.RequestServices.GetRequiredService<WebSocketTicketService>();
+        if (ticketService.Redeem(context.Request.Query[TicketQueryName].ToString()))
+            return true;
+
+        // Legacy fallback: the raw API key in the query string.
+        return KeysMatch(context.Request.Query[QueryName].ToString(), apiKey);
     }
 
     /// <summary>

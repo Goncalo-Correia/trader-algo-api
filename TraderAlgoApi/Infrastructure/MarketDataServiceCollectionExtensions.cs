@@ -20,7 +20,10 @@ public static class MarketDataServiceCollectionExtensions
             var baseUrl = configuration["Binance:BaseUrl"] ?? "https://api.binance.com";
             client.BaseAddress = new Uri(baseUrl);
             client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
-        });
+        })
+        // Kline reads are idempotent GETs, so retry/backoff + a circuit breaker are safe here and
+        // keep a slow or rate-limiting Binance from tying up backfill/collector work indefinitely.
+        .AddOutboundResilience();
 
         // BinanceMarketDataService implements both IBinanceMarketDataService and IMarketDataProvider.
         services.AddScoped<BinanceMarketDataService>();
