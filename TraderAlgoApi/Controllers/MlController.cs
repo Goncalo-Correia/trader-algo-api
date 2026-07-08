@@ -470,30 +470,12 @@ public sealed class MlController(
             ModelId:       policy.Id.ToString(),
             TotalTimesteps:                policy.TotalTimesteps,
             InitialBalance:                policy.InitialBalance,
-            Quantity:                      policy.Quantity,
-            Breakeven:                     policy.Breakeven,
-            BreakevenStop:                 policy.BreakevenStop,
             MaxCandlesPerTrade:            policy.MaxCandlesPerTrade,
             DailyProfitTarget:             policy.DailyProfit,
             DailyDrawdownLimit:            policy.DailyDrawdownLimit,
-            FeeRate:                       policy.Fee,
             SlippageRate:                  policy.Slippage,
-            RiskPerTrade:                  policy.RiskPerTrade,
-            EpisodeDays:                   policy.EpisodeDays,
-            EntryCost:                     policy.EntryCost,
-            NoTradeDayPenalty:             policy.NoTradeDayPenalty,
-            StreakBonusCoef:               policy.StreakBonusCoef,
-            MaxStreakBonus:                policy.MaxStreakBonus,
-            MaxPatienceRewardPerDay:       policy.MaxPatienceRewardPerDay,
-            LearningRate:                  policy.LearningRate,
-            NSteps:                        policy.NSteps,
-            BatchSize:                     policy.BatchSize,
-            NEpochs:                       policy.NEpochs,
-            Gamma:                         policy.Gamma,
-            GaeLambda:                     policy.GaeLambda,
-            ClipRange:                     policy.ClipRange,
-            EntCoef:                       policy.EntCoef,
-            OosEvalEvery:                  policy.OosEvalEvery);
+            FeeRate:                       policy.Fee,
+            RiskPerTrade:                  policy.RiskPerTrade ?? 0m);
 
     // -------------------------------------------------------------------------
 
