@@ -86,11 +86,17 @@ instead of proxying the sidecar) and **deletes** rows as cleanup when a training
 ([Dtos/Ml/MlTrainRequest.cs](TraderAlgoApi/Dtos/Ml/MlTrainRequest.cs), built by
 `MlController.BuildTrainRequest`) is a strict subset of the policy: symbol/interval + the
 risk/environment params (`totalTimesteps`, `initialBalance`, `maxCandlesPerTrade`, `dailyProfit`,
-`dailyDrawdownLimit`, `slippage`, `fee`, `riskPerTrade`). The remaining policy columns —
-`quantity`/`breakeven`/`breakevenStop` — are **execution config for the bound bot** (copied to the
-`TradeBot` on bind, consumed by the live monitor and backtest for sizing fallback and the breakeven
-ratchet), *not* training inputs. `riskPerTrade` is `decimal?` on the policy but **required** on the
-wire, so `BuildTrainRequest` maps null → `0` (the sidecar's "no risk override" sentinel). Keep the
+`dailyDrawdownLimit`, `slippage`, `fee`, `riskPerTrade`). ML **sizing is `riskPerTrade`-only**
+(volatility-targeted; `BacktestSimulationEngine.MlPositionSize`) and ML bots run **no breakeven
+ratchet**, so the legacy `quantity`/`breakeven`/`breakevenStop` columns are **retired**: they're not
+in the policy API DTOs ([MlPolicyDtos.cs](TraderAlgoApi/Dtos/Ml/MlPolicyDtos.cs)) or the `/decide`
+request ([MlDecideRequest.cs](TraderAlgoApi/Dtos/Ml/MlDecideRequest.cs)), `MlPoliciesController.Apply`
+no longer writes them, and `TradeBotService.ApplyPolicyRisk` no longer copies them to the bound bot
+(it sets `Quantity = 0`, `Breakeven`/`BreakevenStop = null`). The columns stay mapped on
+[MlPolicy.cs](TraderAlgoApi/Models/MlPolicy.cs) only so the live-DB schema is undisturbed (dropping
+them would be a destructive migration); nothing reads them. `riskPerTrade` is `decimal?` on the
+policy but **required** on the wire, so `BuildTrainRequest` maps null → `0` (the sidecar's "no risk
+override" sentinel); a bound ML bot left without `riskPerTrade` sizes to `0` (no position). Keep the
 DTO in lockstep with the sidecar's train contract; don't assume a new policy column is forwarded to
 training unless you add it to `MlTrainRequest`.
 

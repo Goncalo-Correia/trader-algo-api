@@ -293,8 +293,6 @@ public sealed class MlController(
             LastTradePnl: 0m,
             LastTradeCloseReason: string.Empty,
             CandlesSinceLastTradeClosed: 0,
-            ConfiguredBreakeven: policy.Breakeven,
-            ConfiguredBreakevenStop: policy.BreakevenStop,
             ConfiguredMaxCandlesPerTrade: policy.MaxCandlesPerTrade,
             FeeRate: policy.Fee,
             UnrealizedPnl: 0m);

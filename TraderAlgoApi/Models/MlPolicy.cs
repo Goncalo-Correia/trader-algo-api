@@ -8,9 +8,9 @@ namespace TraderAlgoApi.Models;
 /// A reusable training configuration: which model to train on which symbol/interval, plus the
 /// risk/environment parameters forwarded to the ML train endpoint. One policy can have many
 /// <see cref="MlTrainingRun"/>s (each run trains this policy over a chosen date range). Cash risk
-/// params are absolute amounts (matching backtests); <see cref="Breakeven"/>/<see cref="BreakevenStop"/>
-/// are ATR multipliers (see their docs) used by the bound bot's live/backtest execution. The
-/// stop-loss and take-profit brackets are chosen by the model at entry, so they are not stored here.
+/// params are absolute amounts (matching backtests). ML sizing is driven solely by
+/// <see cref="RiskPerTrade"/> (volatility-targeted), and the stop-loss/take-profit brackets are
+/// chosen by the model at entry, so neither is stored here.
 /// </summary>
 [Table("ml_policies")]
 public sealed class MlPolicy
@@ -34,21 +34,24 @@ public sealed class MlPolicy
     [Precision(28, 10)]
     public decimal InitialBalance { get; set; }
 
+    /// <summary>
+    /// Retired: no longer part of the policy API, the train request, or ML execution (sizing is
+    /// <see cref="RiskPerTrade"/>-only). The column is kept mapped so existing rows and the live DB
+    /// schema are undisturbed (dropping it would be a destructive migration); it is never read.
+    /// </summary>
     [Precision(28, 10)]
     public decimal Quantity { get; set; }
 
     /// <summary>
-    /// Breakeven trigger as an ATR multiplier evaluated against ATR at entry: the stop is moved to
-    /// breakeven once price reaches entry ± (Breakeven × ATR_at_entry). Not an absolute price offset.
-    /// 0 disables the breakeven ratchet. Typical range ~0.5–2.0.
+    /// Retired: ML bots no longer run a breakeven ratchet, so this is no longer part of the policy
+    /// API or execution. Kept mapped only for live-DB schema compatibility; it is never read.
     /// </summary>
     [Precision(28, 10)]
     public decimal Breakeven { get; set; }
 
     /// <summary>
-    /// Ratcheted stop as an ATR multiplier evaluated against ATR at entry: once breakeven triggers,
-    /// the stop moves to entry ± (BreakevenStop × ATR_at_entry). Not an absolute price offset.
-    /// Typical range ~0.0–1.0.
+    /// Retired: paired with <see cref="Breakeven"/>, which ML bots no longer apply. Kept mapped only
+    /// for live-DB schema compatibility; it is never read.
     /// </summary>
     [Precision(28, 10)]
     public decimal BreakevenStop { get; set; }
@@ -64,9 +67,9 @@ public sealed class MlPolicy
     public decimal Slippage { get; set; }
 
     /// <summary>
-    /// Optional cash risked at the stop for volatility-targeted position sizing. When set (&gt; 0),
-    /// the ML position size is RiskPerTrade / stop_distance (stop_distance = sl_atr_mult ×
-    /// ATR-at-entry). Null/≤ 0 falls back to the fixed <see cref="Quantity"/>. ML-specific.
+    /// Cash risked at the stop for volatility-targeted position sizing — the sole ML sizing input.
+    /// When set (&gt; 0), the ML position size is RiskPerTrade / stop_distance (stop_distance =
+    /// sl_atr_mult × ATR-at-entry). Null/≤ 0 yields no size (bound ML bots require it). ML-specific.
     /// </summary>
     [Precision(28, 10)]
     public decimal? RiskPerTrade { get; set; }

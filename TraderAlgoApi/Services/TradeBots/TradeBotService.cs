@@ -304,13 +304,15 @@ public sealed class TradeBotService(
 
     private static void ApplyPolicyRisk(TradeBot tradeBot, MlPolicy policy)
     {
-        tradeBot.Quantity = policy.Quantity;
+        // ML sizing is volatility-targeted from the policy's RiskPerTrade (read at entry via
+        // MlPositionSize), so the bot carries no fixed quantity; and ML bots run no breakeven ratchet.
+        tradeBot.Quantity = 0m;
+        tradeBot.Breakeven = null;
+        tradeBot.BreakevenStop = null;
         // ML policies no longer carry fixed stop-loss/take-profit brackets: the model chooses the
         // ATR-sized SL/TP bracket at entry, so leave the bot's SL/TP unset for the ML strategy.
         tradeBot.StopLoss = null;
         tradeBot.TakeProfit = null;
-        tradeBot.Breakeven = policy.Breakeven;
-        tradeBot.BreakevenStop = policy.BreakevenStop;
         tradeBot.DailyProfitGoal = policy.DailyProfit;
         tradeBot.MaxLossesPerDay = null;
         tradeBot.MaxCandlesPerTrade = policy.MaxCandlesPerTrade;

@@ -125,9 +125,6 @@ public sealed class MlPoliciesController(
     {
         policy.TotalTimesteps      = r.TotalTimesteps;
         policy.InitialBalance      = r.InitialBalance;
-        policy.Quantity            = r.Quantity;
-        policy.Breakeven           = r.Breakeven;
-        policy.BreakevenStop       = r.BreakevenStop;
         policy.Fee                 = r.Fee;
         policy.Slippage            = r.Slippage;
         policy.DailyProfit         = r.DailyProfit;
@@ -145,9 +142,6 @@ public sealed class MlPoliciesController(
             IntervalCode:        p.Interval.Code,
             TotalTimesteps:      p.TotalTimesteps,
             InitialBalance:      p.InitialBalance,
-            Quantity:            p.Quantity,
-            Breakeven:           p.Breakeven,
-            BreakevenStop:       p.BreakevenStop,
             Fee:                 p.Fee,
             Slippage:            p.Slippage,
             DailyProfit:         p.DailyProfit,

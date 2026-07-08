@@ -161,8 +161,6 @@ public sealed class TradeBotSignalService(
             LastTradePnl: lastTrade?.Pnl ?? 0m,
             LastTradeCloseReason: CloseReasonName(lastTrade),
             CandlesSinceLastTradeClosed: candlesSinceLastTradeClosed,
-            ConfiguredBreakeven: policy.Breakeven,
-            ConfiguredBreakevenStop: policy.BreakevenStop,
             ConfiguredMaxCandlesPerTrade: policy.MaxCandlesPerTrade,
             FeeRate: policy.Fee,
             UnrealizedPnl: 0m);

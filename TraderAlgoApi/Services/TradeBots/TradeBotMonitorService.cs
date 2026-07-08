@@ -197,7 +197,8 @@ public sealed class TradeBotMonitorService(
             stopLoss = slDistance;
             takeProfit = tpDistance;
             atrAtEntry = bracket.AtrAtEntry;
-            // Volatility-targeted sizing when the policy sets risk-per-trade; else the fixed quantity.
+            // Volatility-targeted sizing from the policy's risk-per-trade (the sole ML sizing input;
+            // the bound bot carries no fixed quantity, so a policy without risk-per-trade sizes to 0).
             quantity = BacktestSimulationEngine.MlPositionSize(
                 tradeBot.Quantity, tradeBot.MlPolicy?.RiskPerTrade, slDistance);
         }
