@@ -82,6 +82,18 @@ model and don't add telemetry-producing write paths from this app. This app only
 instead of proxying the sidecar) and **deletes** rows as cleanup when a training run is removed
 (`MlController` DELETE `training-runs/{id}`).
 
+**`MlPolicy` columns are not all sent to `/train`.** The `/train` request
+([Dtos/Ml/MlTrainRequest.cs](TraderAlgoApi/Dtos/Ml/MlTrainRequest.cs), built by
+`MlController.BuildTrainRequest`) is a strict subset of the policy: symbol/interval + the
+risk/environment params (`totalTimesteps`, `initialBalance`, `maxCandlesPerTrade`, `dailyProfit`,
+`dailyDrawdownLimit`, `slippage`, `fee`, `riskPerTrade`). The remaining policy columns —
+`quantity`/`breakeven`/`breakevenStop` — are **execution config for the bound bot** (copied to the
+`TradeBot` on bind, consumed by the live monitor and backtest for sizing fallback and the breakeven
+ratchet), *not* training inputs. `riskPerTrade` is `decimal?` on the policy but **required** on the
+wire, so `BuildTrainRequest` maps null → `0` (the sidecar's "no risk override" sentinel). Keep the
+DTO in lockstep with the sidecar's train contract; don't assume a new policy column is forwarded to
+training unless you add it to `MlTrainRequest`.
+
 **Enum ↔ lookup-table dual representation (important).** Every lookup (TradeSide, TradeStatus,
 TradingStrategy, SyncJobType, etc.) exists as both:
 - a `Models/Enums/*.cs` C# enum, and

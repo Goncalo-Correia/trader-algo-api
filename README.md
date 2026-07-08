@@ -347,15 +347,16 @@ frontend replay a trained model's decision process the same way a backtest is st
 ```mermaid
 erDiagram
   ml_policies ||--o{ ml_training_runs : "has runs"
-  ml_policies { long Id; int SymbolId; int IntervalId; int TotalTimesteps; decimal riskParams; double tuningParams }
+  ml_policies { long Id; int SymbolId; int IntervalId; int TotalTimesteps; decimal riskParams }
   ml_training_runs { long Id; long MlPolicyId; datetimeoffset From; datetimeoffset To; int StatusId; decimal FinalBalance; decimal FinalBalanceOos }
 ```
 
-- **`ml_policies`** — a reusable config: symbol/interval + all PPO/risk hyperparameters
-  (`totalTimesteps`, `initialBalance`, `quantity`, `breakeven`, `breakevenStop`, `fee`, `slippage`,
-  `dailyProfit`, `dailyDrawdownLimit`, `maxCandlesPerTrade`, optional `riskPerTrade`) plus optional
-  [tuning parameters](#optional-tuning-parameters). `breakeven`/`breakevenStop` are ATR multipliers
-  (see below); the stop-loss/take-profit brackets are chosen by the model at entry, so there are no
+- **`ml_policies`** — a reusable config: symbol/interval + the risk/environment parameters forwarded
+  to the `/train` endpoint (`totalTimesteps`, `initialBalance`, `maxCandlesPerTrade`, `dailyProfit`,
+  `dailyDrawdownLimit`, `slippage`, `fee`, `riskPerTrade`) plus the bound-bot execution params
+  (`quantity`, `breakeven`, `breakevenStop`). `breakeven`/`breakevenStop` are ATR multipliers (see
+  below) applied by the bound bot's live/backtest execution, not sent to `/train`; the stop-loss/
+  take-profit brackets are chosen by the model at entry, so there are no
   `stopLoss`/`takeProfit`/`maxTrailingDrawdown` policy fields. Live trade bots and backtests running
   the ML Policy strategy reference a policy by id (`mlPolicyId`); the policy id is also the model
   identifier sent to the sidecar.
@@ -424,19 +425,8 @@ sidecar restarts mid-run, on startup it reconciles orphaned runs: any run still 
 `Failed` and a `Failed` callback is sent. The API therefore may receive a `Failed` completion for a run
 it only ever saw as `Running`. `Failed` is terminal and the run can simply be retriggered.
 
-<a id="optional-tuning-parameters"></a>
-**Optional tuning parameters.** Policies expose the sidecar's PPO/reward tuning knobs. All are
-**nullable** — when a value is null it is omitted from the `/train` request and the sidecar applies its
-own default, so existing policies are unaffected.
-
-| Group | Parameters (sidecar default) |
-|---|---|
-| Reward shaping | `entryCost` (0.05), `noTradeDayPenalty` (1.0), `streakBonusCoef` (0.1), `maxStreakBonus` (0.5), `maxPatienceRewardPerDay` (0.5) |
-| Episode | `episodeDays` (5.0) |
-| PPO | `learningRate` (0.0003), `nSteps` (2048, fresh only), `batchSize` (64, fresh only), `nEpochs` (10), `gamma` (0.99), `gaeLambda` (0.95), `clipRange` (0.2), `entCoef` (0.01) |
-| OOS eval | `oosEvalEvery` (1 — higher = faster training) |
-
-Cash risk hyperparameters are **absolute amounts**, consistent with backtests — not fractions. `fee`
+**Risk / environment parameters.** Cash risk hyperparameters are **absolute amounts**, consistent
+with backtests — not fractions. `fee`
 is a flat cash fee per round-trip. `slippage` is an **ATR fraction**: the per-fill price offset is
 `slippage × ATR_at_entry` (applied on both entry and exit fills in the backtest/training env), not a
 fixed price offset. `breakeven` and
@@ -448,8 +438,9 @@ an R-multiple TP bracket), so they are no longer policy config — the former `s
 and `maxTrailingDrawdown` policy fields have been removed. `riskPerTrade` is an optional absolute cash
 amount for **volatility-targeted sizing**: when set (`> 0`) the position size is
 `riskPerTrade / stop_distance` (where `stop_distance = sl_atr_mult × ATR_at_entry`, the model-chosen
-SL bracket); when null or `≤ 0` the fixed `quantity` is used instead. It is omitted from the `/train`
-request when null so the sidecar falls back to the fixed quantity.
+SL bracket); when null or `≤ 0` the fixed `quantity` is used instead by the bound bot's live/backtest
+execution. It is always sent to the `/train` request (a null policy value is forwarded as `0`, the
+sidecar's "no risk override" sentinel).
 
 **Decision replay.** `WS /ws/ml/training?trainingRunId={id}` streams the run's candles (from the
 database) zipped with the model's per-candle decisions — emitting `candle` and `mlDecision` frames —

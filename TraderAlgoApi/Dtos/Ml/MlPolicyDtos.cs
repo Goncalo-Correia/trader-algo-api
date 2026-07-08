@@ -19,23 +19,7 @@ public sealed record MlPolicyRequest(
     [property: JsonPropertyName("dailyDrawdownLimit")]  decimal DailyDrawdownLimit,
     [property: JsonPropertyName("maxCandlesPerTrade")]  int MaxCandlesPerTrade,
     // Optional cash risked at the stop for volatility-targeted ML sizing. Null/≤ 0 = fixed quantity.
-    [property: JsonPropertyName("riskPerTrade")]        decimal? RiskPerTrade = null,
-    // Optional ML tuning parameters (§3). Null = use the ML service default.
-    [property: JsonPropertyName("episodeDays")]             double? EpisodeDays = null,
-    [property: JsonPropertyName("entryCost")]               double? EntryCost = null,
-    [property: JsonPropertyName("noTradeDayPenalty")]       double? NoTradeDayPenalty = null,
-    [property: JsonPropertyName("streakBonusCoef")]         double? StreakBonusCoef = null,
-    [property: JsonPropertyName("maxStreakBonus")]          double? MaxStreakBonus = null,
-    [property: JsonPropertyName("maxPatienceRewardPerDay")] double? MaxPatienceRewardPerDay = null,
-    [property: JsonPropertyName("learningRate")]            double? LearningRate = null,
-    [property: JsonPropertyName("nSteps")]                  int? NSteps = null,
-    [property: JsonPropertyName("batchSize")]               int? BatchSize = null,
-    [property: JsonPropertyName("nEpochs")]                 int? NEpochs = null,
-    [property: JsonPropertyName("gamma")]                   double? Gamma = null,
-    [property: JsonPropertyName("gaeLambda")]               double? GaeLambda = null,
-    [property: JsonPropertyName("clipRange")]               double? ClipRange = null,
-    [property: JsonPropertyName("entCoef")]                 double? EntCoef = null,
-    [property: JsonPropertyName("oosEvalEvery")]            int? OosEvalEvery = null);
+    [property: JsonPropertyName("riskPerTrade")]        decimal? RiskPerTrade = null);
 
 public sealed record MlPolicyResponse(
     [property: JsonPropertyName("id")]            long Id,
@@ -54,20 +38,5 @@ public sealed record MlPolicyResponse(
     [property: JsonPropertyName("dailyDrawdownLimit")]  decimal DailyDrawdownLimit,
     [property: JsonPropertyName("maxCandlesPerTrade")]  int MaxCandlesPerTrade,
     [property: JsonPropertyName("riskPerTrade")]        decimal? RiskPerTrade,
-    [property: JsonPropertyName("episodeDays")]             double? EpisodeDays,
-    [property: JsonPropertyName("entryCost")]               double? EntryCost,
-    [property: JsonPropertyName("noTradeDayPenalty")]       double? NoTradeDayPenalty,
-    [property: JsonPropertyName("streakBonusCoef")]         double? StreakBonusCoef,
-    [property: JsonPropertyName("maxStreakBonus")]          double? MaxStreakBonus,
-    [property: JsonPropertyName("maxPatienceRewardPerDay")] double? MaxPatienceRewardPerDay,
-    [property: JsonPropertyName("learningRate")]            double? LearningRate,
-    [property: JsonPropertyName("nSteps")]                  int? NSteps,
-    [property: JsonPropertyName("batchSize")]               int? BatchSize,
-    [property: JsonPropertyName("nEpochs")]                 int? NEpochs,
-    [property: JsonPropertyName("gamma")]                   double? Gamma,
-    [property: JsonPropertyName("gaeLambda")]               double? GaeLambda,
-    [property: JsonPropertyName("clipRange")]               double? ClipRange,
-    [property: JsonPropertyName("entCoef")]                 double? EntCoef,
-    [property: JsonPropertyName("oosEvalEvery")]            int? OosEvalEvery,
     [property: JsonPropertyName("createdAt")]           long CreatedAt,
     [property: JsonPropertyName("trainingRunCount")]    int TrainingRunCount);

@@ -134,21 +134,6 @@ public sealed class MlPoliciesController(
         policy.DailyDrawdownLimit  = r.DailyDrawdownLimit;
         policy.MaxCandlesPerTrade  = r.MaxCandlesPerTrade;
         policy.RiskPerTrade        = r.RiskPerTrade;
-        policy.EpisodeDays             = r.EpisodeDays;
-        policy.EntryCost               = r.EntryCost;
-        policy.NoTradeDayPenalty       = r.NoTradeDayPenalty;
-        policy.StreakBonusCoef         = r.StreakBonusCoef;
-        policy.MaxStreakBonus          = r.MaxStreakBonus;
-        policy.MaxPatienceRewardPerDay = r.MaxPatienceRewardPerDay;
-        policy.LearningRate            = r.LearningRate;
-        policy.NSteps                  = r.NSteps;
-        policy.BatchSize               = r.BatchSize;
-        policy.NEpochs                 = r.NEpochs;
-        policy.Gamma                   = r.Gamma;
-        policy.GaeLambda               = r.GaeLambda;
-        policy.ClipRange               = r.ClipRange;
-        policy.EntCoef                 = r.EntCoef;
-        policy.OosEvalEvery            = r.OosEvalEvery;
     }
 
     private static MlPolicyResponse ToDto(MlPolicy p, int trainingRunCount) =>
@@ -169,21 +154,6 @@ public sealed class MlPoliciesController(
             DailyDrawdownLimit:  p.DailyDrawdownLimit,
             MaxCandlesPerTrade:  p.MaxCandlesPerTrade,
             RiskPerTrade:        p.RiskPerTrade,
-            EpisodeDays:             p.EpisodeDays,
-            EntryCost:               p.EntryCost,
-            NoTradeDayPenalty:       p.NoTradeDayPenalty,
-            StreakBonusCoef:         p.StreakBonusCoef,
-            MaxStreakBonus:          p.MaxStreakBonus,
-            MaxPatienceRewardPerDay: p.MaxPatienceRewardPerDay,
-            LearningRate:            p.LearningRate,
-            NSteps:                  p.NSteps,
-            BatchSize:               p.BatchSize,
-            NEpochs:                 p.NEpochs,
-            Gamma:                   p.Gamma,
-            GaeLambda:               p.GaeLambda,
-            ClipRange:               p.ClipRange,
-            EntCoef:                 p.EntCoef,
-            OosEvalEvery:            p.OosEvalEvery,
             CreatedAt:           p.CreatedAt.ToUnixTimeMilliseconds(),
             TrainingRunCount:    trainingRunCount);
 }
