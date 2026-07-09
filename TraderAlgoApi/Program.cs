@@ -81,8 +81,14 @@ builder.Services.AddCors(options =>
 
 // Register both a scoped DbContext (for controllers/services) and a factory (for long-lived
 // WebSocket streams and background work that must not hold a request-scoped context open).
-var connectionString = builder.Configuration.GetConnectionString("Supabase");
-void ConfigureDb(DbContextOptionsBuilder options) => options.UseNpgsql(connectionString);
+var connectionString = BuildSupabaseConnectionString(builder.Configuration);
+void ConfigureDb(DbContextOptionsBuilder options) =>
+    options.UseNpgsql(
+        connectionString,
+        npgsqlOptions => npgsqlOptions.EnableRetryOnFailure(
+            maxRetryCount: 5,
+            maxRetryDelay: TimeSpan.FromSeconds(10),
+            errorCodesToAdd: null));
 builder.Services.AddDbContext<ApplicationDbContext>(ConfigureDb);
 builder.Services.AddDbContextFactory<ApplicationDbContext>(ConfigureDb, ServiceLifetime.Scoped);
 builder.Services.AddDbContext<MlflowDbContext>(ConfigureDb);
@@ -233,3 +239,33 @@ app.MapControllers();
 app.MapHealthChecks("/health");
 
 app.Run();
+
+static string BuildSupabaseConnectionString(IConfiguration configuration)
+{
+    var configured = configuration.GetConnectionString("Supabase");
+    if (string.IsNullOrWhiteSpace(configured))
+        throw new InvalidOperationException("ConnectionStrings:Supabase is required.");
+
+    var builder = new NpgsqlConnectionStringBuilder(configured)
+    {
+        Pooling = true,
+        GssEncryptionMode = GssEncryptionMode.Disable
+    };
+
+    var maxPoolSize = configuration.GetValue("Database:MaxPoolSize", 10);
+    if (maxPoolSize <= 0)
+        throw new InvalidOperationException("Database:MaxPoolSize must be greater than zero.");
+
+    builder.MaxPoolSize = maxPoolSize;
+
+    var minPoolSize = configuration.GetValue<int?>("Database:MinPoolSize");
+    if (minPoolSize is not null)
+    {
+        if (minPoolSize < 0 || minPoolSize > maxPoolSize)
+            throw new InvalidOperationException("Database:MinPoolSize must be between zero and Database:MaxPoolSize.");
+
+        builder.MinPoolSize = minPoolSize.Value;
+    }
+
+    return builder.ConnectionString;
+}

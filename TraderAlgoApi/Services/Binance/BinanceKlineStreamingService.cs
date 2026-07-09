@@ -22,18 +22,48 @@ public sealed class BinanceKlineStreamingService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        List<(string Symbol, string Interval)> combos;
-
-        await using (var scope = scopeFactory.CreateAsyncScope())
+        var combos = await LoadActiveCombosWithRetryAsync(stoppingToken);
+        if (combos.Count == 0)
         {
-            var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-            combos = await LoadActiveCombosAsync(dbContext, stoppingToken);
+            logger.LogInformation("No active Binance symbol/interval combos found; kline streaming is idle");
+            return;
         }
 
         logger.LogInformation("Starting kline streams for {Count} symbol/interval combos", combos.Count);
 
         var tasks = combos.Select(c => RunStreamAsync(c.Symbol, c.Interval, stoppingToken));
         await Task.WhenAll(tasks);
+    }
+
+    private async Task<List<(string Symbol, string Interval)>> LoadActiveCombosWithRetryAsync(
+        CancellationToken stoppingToken)
+    {
+        var delay = TimeSpan.FromSeconds(10);
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                await using var scope = scopeFactory.CreateAsyncScope();
+                var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+                return await LoadActiveCombosAsync(dbContext, stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(
+                    ex,
+                    "Failed to load Binance kline stream subscriptions; retrying in {Delay}",
+                    delay);
+
+                await Task.Delay(delay, stoppingToken);
+            }
+        }
+
+        return [];
     }
 
     private async Task RunStreamAsync(string symbol, string interval, CancellationToken stoppingToken)

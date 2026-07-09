@@ -82,7 +82,15 @@ two modes' cap behavior in sync if you touch either.
 **DbContext registered twice, deliberately.** Both `AddDbContext` (scoped, for request work) and
 `AddDbContextFactory` (for long-lived WebSocket streams and background jobs that must not hold a
 request-scoped context open). In background/stream code, create a fresh context per unit of work via
-the factory. A second context, `MlflowDbContext`, is read-only over the MLflow tracking schema.
+the factory. A second context, `MlflowDbContext`, is read-only over the MLflow tracking schema. All
+three share one `ConfigureDb` built from `BuildSupabaseConnectionString` ([Program.cs](TraderAlgoApi/Program.cs)):
+it forces `Pooling=true`, disables GSS encryption (`GssEncryptionMode.Disable` — the runtime image
+installs `libgssapi-krb5-2` so Npgsql can negotiate it off), caps the local pool at
+`Database:MaxPoolSize` (default 10, below Supabase's session-pool cap so background workers queue
+locally instead of exhausting Supabase slots) with optional `Database:MinPoolSize`, and enables
+`EnableRetryOnFailure` for transient Postgres faults. Background subscribers that touch the DB at
+startup (e.g. `BinanceKlineStreamingService`) additionally wrap their initial load in their own
+retry-with-backoff loop rather than crashing the host if the DB is briefly unreachable.
 
 **Some tables are written by the ML sidecar, not this app.** The `training_*` telemetry tables
 (`Models/Telemetry/`, mapped in `ApplicationDbContext` and created by a migration so the schema is
