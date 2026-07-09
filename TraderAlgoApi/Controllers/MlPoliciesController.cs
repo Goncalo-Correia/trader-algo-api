@@ -46,6 +46,9 @@ public sealed class MlPoliciesController(
         [FromBody] MlPolicyRequest request,
         CancellationToken cancellationToken)
     {
+        if (ValidateScheme(request) is string schemeError)
+            return BadRequest(schemeError);
+
         var resolved = await ResolveReferencesAsync(request, cancellationToken);
         if (resolved.Error is not null)
             return NotFound(resolved.Error);
@@ -73,6 +76,9 @@ public sealed class MlPoliciesController(
         var policy = await dbContext.MlPolicies.FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
         if (policy is null)
             return NotFound($"Policy {id} not found.");
+
+        if (ValidateScheme(request) is string schemeError)
+            return BadRequest(schemeError);
 
         var resolved = await ResolveReferencesAsync(request, cancellationToken);
         if (resolved.Error is not null)
@@ -121,6 +127,18 @@ public sealed class MlPoliciesController(
         return (symbolId.Value, intervalId.Value, null);
     }
 
+    /// <summary>
+    /// Returns an error message when the request carries an unsupported validation scheme, or null
+    /// when it is valid (a null/blank scheme normalizes to "single" and is accepted).
+    /// </summary>
+    private static string? ValidateScheme(MlPolicyRequest request)
+    {
+        var scheme = ValidationSchemes.Normalize(request.ValidationScheme);
+        return ValidationSchemes.IsValid(scheme)
+            ? null
+            : $"Unsupported validationScheme '{request.ValidationScheme}'. Allowed values: single, block, sliding.";
+    }
+
     private static void Apply(MlPolicy policy, MlPolicyRequest r)
     {
         policy.TotalTimesteps      = r.TotalTimesteps;
@@ -131,6 +149,7 @@ public sealed class MlPoliciesController(
         policy.DailyDrawdownLimit  = r.DailyDrawdownLimit;
         policy.MaxCandlesPerTrade  = r.MaxCandlesPerTrade;
         policy.RiskPerTrade        = r.RiskPerTrade;
+        policy.ValidationScheme    = ValidationSchemes.Normalize(r.ValidationScheme);
     }
 
     private static MlPolicyResponse ToDto(MlPolicy p, int trainingRunCount) =>
@@ -148,6 +167,7 @@ public sealed class MlPoliciesController(
             DailyDrawdownLimit:  p.DailyDrawdownLimit,
             MaxCandlesPerTrade:  p.MaxCandlesPerTrade,
             RiskPerTrade:        p.RiskPerTrade,
+            ValidationScheme:    p.ValidationScheme,
             CreatedAt:           p.CreatedAt.ToUnixTimeMilliseconds(),
             TrainingRunCount:    trainingRunCount);
 }

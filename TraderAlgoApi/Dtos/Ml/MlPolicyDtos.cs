@@ -15,7 +15,9 @@ public sealed record MlPolicyRequest(
     [property: JsonPropertyName("dailyDrawdownLimit")]  decimal DailyDrawdownLimit,
     [property: JsonPropertyName("maxCandlesPerTrade")]  int MaxCandlesPerTrade,
     // Optional cash risked at the stop for volatility-targeted ML sizing (forwarded as risk_per_trade).
-    [property: JsonPropertyName("riskPerTrade")]        decimal? RiskPerTrade = null);
+    [property: JsonPropertyName("riskPerTrade")]        decimal? RiskPerTrade = null,
+    // Optional high-level validation scheme (single|block|sliding); null/blank normalizes to "single".
+    [property: JsonPropertyName("validationScheme")]    string? ValidationScheme = null);
 
 public sealed record MlPolicyResponse(
     [property: JsonPropertyName("id")]            long Id,
@@ -31,5 +33,6 @@ public sealed record MlPolicyResponse(
     [property: JsonPropertyName("dailyDrawdownLimit")]  decimal DailyDrawdownLimit,
     [property: JsonPropertyName("maxCandlesPerTrade")]  int MaxCandlesPerTrade,
     [property: JsonPropertyName("riskPerTrade")]        decimal? RiskPerTrade,
+    [property: JsonPropertyName("validationScheme")]    string ValidationScheme,
     [property: JsonPropertyName("createdAt")]           long CreatedAt,
     [property: JsonPropertyName("trainingRunCount")]    int TrainingRunCount);

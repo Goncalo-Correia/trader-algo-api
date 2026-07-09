@@ -360,13 +360,19 @@ erDiagram
 
 - **`ml_policies`** — a reusable config: symbol/interval + the risk/environment parameters forwarded
   to the `/train` endpoint (`totalTimesteps`, `initialBalance`, `maxCandlesPerTrade`, `dailyProfit`,
-  `dailyDrawdownLimit`, `slippage`, `fee`, `riskPerTrade`). Position sizing is driven **solely** by
-  `riskPerTrade` (volatility-targeted, see below) and the stop-loss/take-profit brackets are chosen
-  by the model at entry, so a policy has no `quantity`, `breakeven`/`breakevenStop`, or
-  `stopLoss`/`takeProfit`/`maxTrailingDrawdown` fields (the legacy `quantity`/`breakeven`/
+  `dailyDrawdownLimit`, `slippage`, `fee`, `riskPerTrade`, `validationScheme`). Position sizing is
+  driven **solely** by `riskPerTrade` (volatility-targeted, see below) and the stop-loss/take-profit
+  brackets are chosen by the model at entry, so a policy has no `quantity`, `breakeven`/`breakevenStop`,
+  or `stopLoss`/`takeProfit`/`maxTrailingDrawdown` fields (the legacy `quantity`/`breakeven`/
   `breakevenStop` columns remain on the table for schema compatibility but are unused). Live trade
   bots and backtests running the ML Policy strategy reference a policy by id (`mlPolicyId`); the
   policy id is also the model identifier sent to the sidecar.
+  - **`validationScheme`** — a high-level choice of how each training run is validated before
+    promotion: `single` (default; one chronological train/out-of-sample split), `block` (walk-forward
+    over equal blocks), or `sliding` (calendar walk-forward simulating periodic retraining). Stored as
+    the exact lowercase string the sidecar accepts and forwarded as `validation_scheme`; fold counts
+    and window sizes remain engine-owned defaults in Python. Create/update reject any other value with
+    a 400, and a null/blank value normalizes to `single`, so older callers are unaffected.
 - **`ml_training_runs`** — one execution of a policy over a date range (model/symbol/interval/params
   come from the policy); holds only run-specific state: dates, status, and final metrics. Metrics are
   recorded both **in-sample** (`finalBalance`, `pnlPct`) and **out-of-sample** (`finalBalanceOos`,

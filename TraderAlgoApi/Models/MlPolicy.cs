@@ -82,6 +82,15 @@ public sealed class MlPolicy
 
     public int MaxCandlesPerTrade { get; set; }
 
+    /// <summary>
+    /// High-level validation scheme forwarded to the ML <c>/train</c> endpoint as
+    /// <c>validation_scheme</c>: <c>single</c> (default), <c>block</c> (block walk-forward), or
+    /// <c>sliding</c> (calendar walk-forward). Persisted as the exact lowercase string the sidecar
+    /// accepts; fold/window knobs remain engine-owned. See <see cref="ValidationSchemes"/>.
+    /// </summary>
+    [MaxLength(16)]
+    public string ValidationScheme { get; set; } = ValidationSchemes.Single;
+
     public DateTimeOffset CreatedAt { get; set; }
 
     public ICollection<MlTrainingRun> TrainingRuns { get; set; } = [];

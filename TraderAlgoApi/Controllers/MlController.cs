@@ -478,7 +478,9 @@ public sealed class MlController(
             DailyDrawdownLimit:            policy.DailyDrawdownLimit,
             SlippageRate:                  policy.Slippage,
             FeeRate:                       policy.Fee,
-            RiskPerTrade:                  policy.RiskPerTrade ?? 0m);
+            RiskPerTrade:                  policy.RiskPerTrade ?? 0m,
+            // Normalize defensively (older rows/blank values) so the sidecar always gets a valid scheme.
+            ValidationScheme:              ValidationSchemes.Normalize(policy.ValidationScheme));
 
     // -------------------------------------------------------------------------
 

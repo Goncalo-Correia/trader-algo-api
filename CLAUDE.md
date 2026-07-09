@@ -96,6 +96,7 @@ instead of proxying the sidecar) and **deletes** rows as cleanup when a training
 **`MlPolicy` columns are not all sent to `/train`.** The `/train` request
 ([Dtos/Ml/MlTrainRequest.cs](TraderAlgoApi/Dtos/Ml/MlTrainRequest.cs), built by
 `MlController.BuildTrainRequest`) is a strict subset of the policy: symbol/interval + the
+high-level `validationScheme` (forwarded as `validation_scheme`; see below) + the
 risk/environment params (`totalTimesteps`, `initialBalance`, `maxCandlesPerTrade`, `dailyProfit`,
 `dailyDrawdownLimit`, `slippage`, `fee`, `riskPerTrade`). ML **sizing is `riskPerTrade`-only**
 (volatility-targeted; `BacktestSimulationEngine.MlPositionSize`) and ML bots run **no breakeven
@@ -110,6 +111,16 @@ policy but **required** on the wire, so `BuildTrainRequest` maps null → `0` (t
 override" sentinel); a bound ML bot left without `riskPerTrade` sizes to `0` (no position). Keep the
 DTO in lockstep with the sidecar's train contract; don't assume a new policy column is forwarded to
 training unless you add it to `MlTrainRequest`.
+
+`validationScheme` is deliberately a plain **lowercase string** (`single`/`block`/`sliding`), not a
+C# enum: the global `JsonStringEnumConverter` has no naming policy, so an enum would serialize
+PascalCase and break the sidecar's `validation_scheme` contract. The allow-list, normalization
+(null/blank → `single`, trim+lowercase), and `IsValid` live in
+[Models/ValidationSchemes.cs](TraderAlgoApi/Models/ValidationSchemes.cs); `MlPoliciesController`
+validates create/update (invalid → 400) and persists the normalized value, and `BuildTrainRequest`
+re-normalizes on the way out so even legacy rows send a valid scheme. Only the high-level choice is
+modelled — fold counts, window sizes, embargo bars, and promotion thresholds stay engine-owned in
+Python; don't add columns/DTO fields for them.
 
 **Enum ↔ lookup-table dual representation (important).** Every lookup (TradeSide, TradeStatus,
 TradingStrategy, SyncJobType, etc.) exists as both:
