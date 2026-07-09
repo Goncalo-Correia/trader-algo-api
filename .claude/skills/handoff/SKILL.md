@@ -44,8 +44,8 @@ anything different?" If no, leave it out.
 
 1. **Establish the change set.** Find what this branch changed relative to `main` (the deploy
    target). Use `git diff main...HEAD` for committed work plus `git status` / `git diff` for
-   uncommitted work. If the branch is `main` or the range is empty/ambiguous, ask the user which
-   commits or range to hand off. Announce the range you settled on.
+   unstaged work and `git diff --staged` for staged work. If the branch is `main` or the range is
+   empty/ambiguous, ask the user which commits or range to hand off. Announce the range you settled on.
 
 2. **Filter to the contract surface.** From the diff, keep only changes under `Controllers/`,
    `Dtos/`, `Models/Enums/`, `Models/Lookups/` (new enum/lookup values), and
@@ -72,10 +72,10 @@ anything different?" If no, leave it out.
    files. Only reference a path you're reasonably confident exists from the feature name; if
    unsure, describe the change and let the agent locate the file.
 
-5. **Write the doc** using the template below. Default output path is `handoff.md` at the
-   trader-algo-api repo root (git-ignore-friendly; the user copies it into a trader-algo-ui
-   session). Honor any path the user gives instead. If a `handoff.md` already exists, confirm
-   before overwriting.
+5. **Write the doc** using the template below. Default output path is
+   `handoff/handoff-<YYYY-MM-DD>-<HHmm>-<short-slug>.md` at the trader-algo-api repo root; create the
+   `handoff/` directory if needed. This is the location the trader-algo-ui `api-agent` skill reads.
+   Honor any path the user gives instead. If the target file already exists, confirm before overwriting.
 
 6. **Report** the output path and a one-line summary of what's in it.
 
