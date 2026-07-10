@@ -32,22 +32,14 @@ public sealed class MlflowTrackingRepository(
             if (run is null)
                 return MlflowTrainingTrackingResponse.Unavailable(trainingRunId, "Tracking data not available yet.");
 
-            // Wave 1 — parallel queries that only need the run UUID
-            var paramsTask         = LoadParamsEfAsync(run.RunUuid, cancellationToken);
-            var latestMetricsTask  = LoadLatestMetricsEfAsync(run.RunUuid, cancellationToken);
-            var metricHistoryTask  = includeMetricHistory
-                ? LoadMetricHistoryEfAsync(run.RunUuid, cancellationToken)
-                : Task.FromResult<Dictionary<string, IReadOnlyList<MlflowMetricPointDto>>>(new());
-            var tagsTask           = LoadTagsAsync(run.RunUuid, cancellationToken);
-            var experimentTask     = LoadExperimentAsync(run.ExperimentId, cancellationToken);
-
-            await Task.WhenAll(paramsTask, latestMetricsTask, metricHistoryTask, tagsTask, experimentTask);
-
-            var parameters    = await paramsTask;
-            var latestMetrics = await latestMetricsTask;
-            var metricHistory = await metricHistoryTask;
-            var tags          = await tagsTask;
-            var experiment    = await experimentTask;
+            // EF DbContext instances do not support concurrent operations, so keep these reads sequential.
+            var parameters = await LoadParamsEfAsync(run.RunUuid, cancellationToken);
+            var latestMetrics = await LoadLatestMetricsEfAsync(run.RunUuid, cancellationToken);
+            var metricHistory = includeMetricHistory
+                ? await LoadMetricHistoryEfAsync(run.RunUuid, cancellationToken)
+                : new Dictionary<string, IReadOnlyList<MlflowMetricPointDto>>();
+            var tags = await LoadTagsAsync(run.RunUuid, cancellationToken);
+            var experiment = await LoadExperimentAsync(run.ExperimentId, cancellationToken);
 
             // Wave 2 — registry lookup requires model_id from params
             MlflowModelRegistryDto? registry = null;
@@ -298,24 +290,20 @@ public sealed class MlflowTrackingRepository(
         string runUuid,
         CancellationToken cancellationToken)
     {
-        var registeredModelTask = mlflowDb.RegisteredModels
+        var registeredModel = await mlflowDb.RegisteredModels
             .AsNoTracking()
             .Where(m => m.Name == modelName)
             .FirstOrDefaultAsync(cancellationToken);
 
-        var versionsTask = mlflowDb.ModelVersions
+        var versions = await mlflowDb.ModelVersions
             .AsNoTracking()
             .Where(v => v.Name == modelName)
             .OrderBy(v => v.Version)
             .ToListAsync(cancellationToken);
 
-        await Task.WhenAll(registeredModelTask, versionsTask);
-
-        var registeredModel = await registeredModelTask;
         if (registeredModel is null)
             return null;
 
-        var versions = await versionsTask;
         var versionDtos = versions.Select(v => new MlflowModelVersionDto(
             Version:         v.Version,
             CurrentStage:    v.CurrentStage,
