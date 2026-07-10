@@ -93,7 +93,13 @@ public sealed class TradeBotSignalService(
             .AsNoTracking()
             .Where(k => k.SymbolId == tradeBot.SymbolId && k.IntervalId == tradeBot.IntervalId)
             .OrderByDescending(k => k.OpenTime)
-            .Select(k => new { k.Volume, k.TakerBuyBaseAssetVolume, AtrValue = (decimal?)(k.Atr != null ? k.Atr.AtrValue : null) })
+            .Select(k => new
+            {
+                k.OpenTime,
+                k.Volume,
+                k.TakerBuyBaseAssetVolume,
+                AtrValue = (decimal?)(k.Atr != null ? k.Atr.AtrValue : null)
+            })
             .FirstOrDefaultAsync(cancellationToken);
 
         var closedTrades = await dbContext.Trades
@@ -147,7 +153,9 @@ public sealed class TradeBotSignalService(
                 RsiSmooth:      context.CurrentRsiSmooth,
                 MacdLine:       context.CurrentMacdLine,
                 SignalLine:     context.CurrentSignalLine,
-                Histogram:      context.CurrentHistogram),
+                Histogram:      context.CurrentHistogram,
+                Atr:            latestCandle?.AtrValue,
+                OpenTime:       latestCandle?.OpenTime.ToUnixTimeSeconds()),
             Position:      0,
             InitialAccountBalance: tradeBot.TradingAccount.InitialBalance,
             CurrentAccountBalance: tradeBot.TradingAccount.CurrentBalance,
@@ -195,7 +203,13 @@ public sealed class TradeBotSignalService(
             return new TradeBotSignalResult(TradeBotSignal.None, "ML entry missing bracket (treated as hold).");
         }
 
-        var atrAtEntry = BacktestSimulationEngine.AtrAtEntryOrFallback(latestCandle?.AtrValue);
+        if (latestCandle?.AtrValue is not decimal atrAtEntry || atrAtEntry <= 0m)
+        {
+            logger.LogWarning(
+                "ML policy {PolicyId} signaled an entry but latest candle has no positive precomputed ATR; treating as hold.",
+                policy.Id);
+            return new TradeBotSignalResult(TradeBotSignal.None, "ML entry missing ATR (treated as hold).");
+        }
         var bracket = new MlBracket(slAtrMult, tpRMult, atrAtEntry);
         var signal = response.Action == MlActionEnterLong ? TradeBotSignal.EnterLong : TradeBotSignal.EnterShort;
         var direction = response.Action == MlActionEnterLong ? "long" : "short";

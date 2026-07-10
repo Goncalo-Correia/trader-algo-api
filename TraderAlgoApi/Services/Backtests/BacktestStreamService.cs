@@ -413,7 +413,8 @@ public sealed class BacktestStreamService(
                     {
                         // Size the bracket from ATR-at-entry: stop = slAtrMult × ATR, TP = tpRMult × stop.
                         // Entry fills at close ± (slippageRate × ATR-at-entry), matching the env.
-                        var atr = BacktestSimulationEngine.AtrAtEntryOrFallback(current.Atr?.AtrValue);
+                        if (current.Atr?.AtrValue is not decimal atr || atr <= 0m)
+                            continue;
                         var (slDistance, tpDistance) = BacktestSimulationEngine.MlBracketDistances(atr, slAtrMult, tpRMult);
                         atrAtEntry = atr;
                         stopLoss   = slDistance;
@@ -702,7 +703,9 @@ public sealed class BacktestStreamService(
                 RsiSmooth:      context.CurrentRsiSmooth,
                 MacdLine:       context.CurrentMacdLine,
                 SignalLine:     context.CurrentSignalLine,
-                Histogram:      context.CurrentHistogram),
+                Histogram:      context.CurrentHistogram,
+                Atr:            current.Atr?.AtrValue,
+                OpenTime:       current.OpenTime.ToUnixTimeSeconds()),
             Position:      0,
             InitialAccountBalance: backtest.InitialBalance,
             CurrentAccountBalance: balance,

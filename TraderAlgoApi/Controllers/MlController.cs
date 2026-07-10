@@ -253,6 +253,7 @@ public sealed class MlController(
                 k.High,
                 k.Low,
                 k.Close,
+                k.OpenTime,
                 k.Volume,
                 k.TakerBuyBaseAssetVolume,
                 Sma20    = k.SimpleMovingAverage != null ? k.SimpleMovingAverage.Sma20    : (decimal?)null,
@@ -262,6 +263,7 @@ public sealed class MlController(
                 MacdLine  = k.Macd != null ? k.Macd.MacdLine   : (decimal?)null,
                 SignalLine = k.Macd != null ? k.Macd.SignalLine : (decimal?)null,
                 Histogram  = k.Macd != null ? k.Macd.Histogram : (decimal?)null,
+                Atr        = k.Atr != null ? k.Atr.AtrValue : (decimal?)null,
             })
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -286,7 +288,9 @@ public sealed class MlController(
                 RsiSmooth:      kline.RsiSmooth,
                 MacdLine:       kline.MacdLine,
                 SignalLine:     kline.SignalLine,
-                Histogram:      kline.Histogram),
+                Histogram:      kline.Histogram,
+                Atr:            kline.Atr,
+                OpenTime:       kline.OpenTime.ToUnixTimeSeconds()),
             Position:      0,
             InitialAccountBalance: policy.InitialBalance,
             CurrentAccountBalance: policy.InitialBalance,
@@ -480,7 +484,7 @@ public sealed class MlController(
             DailyDrawdownLimit:            policy.DailyDrawdownLimit,
             SlippageRate:                  policy.Slippage,
             FeeRate:                       policy.Fee,
-            RiskPerTrade:                  policy.RiskPerTrade ?? 0m,
+            RiskPerTrade:                  policy.RiskPerTrade,
             // Normalize defensively (older rows/blank values) so the sidecar always gets a valid scheme.
             ValidationScheme:              ValidationSchemes.Normalize(policy.ValidationScheme));
 

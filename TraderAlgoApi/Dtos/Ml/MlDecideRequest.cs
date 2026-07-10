@@ -38,4 +38,6 @@ public sealed record MlCandleFeatures(
     [property: JsonPropertyName("rsi_smooth")]       decimal? RsiSmooth,
     [property: JsonPropertyName("macd_line")]        decimal? MacdLine,
     [property: JsonPropertyName("signal_line")]      decimal? SignalLine,
-    [property: JsonPropertyName("histogram")]        decimal? Histogram);
+    [property: JsonPropertyName("histogram")]        decimal? Histogram,
+    [property: JsonPropertyName("atr")]              decimal? Atr,
+    [property: JsonPropertyName("open_time")]        long? OpenTime);

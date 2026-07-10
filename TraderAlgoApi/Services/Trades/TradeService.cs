@@ -434,6 +434,7 @@ public sealed class TradeService(
         var isBuy = trade.SideId == (int)TradeSide.Buy;
 
         TradeCloseReason? reason = null;
+        decimal? triggerPrice = null;
 
         if (trade.StopLoss.HasValue)
         {
@@ -445,7 +446,10 @@ public sealed class TradeService(
                 trade.Id, (TradeSide)trade.SideId, entry, trade.StopLoss.Value, slPrice, price, hit);
 
             if (hit)
+            {
                 reason = TradeCloseReason.StopLoss;
+                triggerPrice = slPrice;
+            }
         }
 
         if (reason is null && trade.TakeProfit.HasValue)
@@ -458,21 +462,24 @@ public sealed class TradeService(
                 trade.Id, (TradeSide)trade.SideId, entry, trade.TakeProfit.Value, tpPrice, price, hit);
 
             if (hit)
+            {
                 reason = TradeCloseReason.TakeProfit;
+                triggerPrice = tpPrice;
+            }
         }
 
         if (reason is null)
             return false;
 
         logger.LogInformation(
-            "Trade {Id} triggered {Reason}: entry={Entry} closedPrice={Price} slOffset={SlOffset} tpOffset={TpOffset}",
-            trade.Id, reason.Value, entry, price, trade.StopLoss, trade.TakeProfit);
+            "Trade {Id} triggered {Reason}: entry={Entry} triggerPrice={TriggerPrice} observedPrice={Price} slOffset={SlOffset} tpOffset={TpOffset}",
+            trade.Id, reason.Value, entry, triggerPrice, price, trade.StopLoss, trade.TakeProfit);
 
         trade.StatusId      = (int)TradeStatus.Closed;
         trade.ClosedAt      = now;
-        trade.ClosedPrice   = price;
+        trade.ClosedPrice   = triggerPrice!.Value;
         trade.CloseReasonId = (int)reason.Value;
-        trade.Pnl           = CalculatePnl(trade, price);
+        trade.Pnl           = CalculatePnl(trade, triggerPrice.Value);
         return true;
     }
 
