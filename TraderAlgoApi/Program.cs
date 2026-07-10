@@ -252,11 +252,23 @@ static string BuildSupabaseConnectionString(IConfiguration configuration)
         GssEncryptionMode = GssEncryptionMode.Disable
     };
 
-    var maxPoolSize = configuration.GetValue("Database:MaxPoolSize", 10);
+    var maxPoolSize = configuration.GetValue("Database:MaxPoolSize", 5);
     if (maxPoolSize <= 0)
         throw new InvalidOperationException("Database:MaxPoolSize must be greater than zero.");
 
     builder.MaxPoolSize = maxPoolSize;
+
+    var connectionIdleLifetime = configuration.GetValue("Database:ConnectionIdleLifetimeSeconds", 30);
+    if (connectionIdleLifetime <= 0)
+        throw new InvalidOperationException("Database:ConnectionIdleLifetimeSeconds must be greater than zero.");
+
+    builder.ConnectionIdleLifetime = connectionIdleLifetime;
+
+    var connectionPruningInterval = configuration.GetValue("Database:ConnectionPruningIntervalSeconds", 10);
+    if (connectionPruningInterval <= 0)
+        throw new InvalidOperationException("Database:ConnectionPruningIntervalSeconds must be greater than zero.");
+
+    builder.ConnectionPruningInterval = connectionPruningInterval;
 
     var minPoolSize = configuration.GetValue<int?>("Database:MinPoolSize");
     if (minPoolSize is not null)

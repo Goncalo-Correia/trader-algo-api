@@ -86,8 +86,10 @@ the factory. A second context, `MlflowDbContext`, is read-only over the MLflow t
 three share one `ConfigureDb` built from `BuildSupabaseConnectionString` ([Program.cs](TraderAlgoApi/Program.cs)):
 it forces `Pooling=true`, disables GSS encryption (`GssEncryptionMode.Disable` — the runtime image
 installs `libgssapi-krb5-2` so Npgsql can negotiate it off), caps the local pool at
-`Database:MaxPoolSize` (default 10, below Supabase's session-pool cap so background workers queue
-locally instead of exhausting Supabase slots) with optional `Database:MinPoolSize`, and enables
+`Database:MaxPoolSize` (default 5, well below Supabase's small session-pool cap so background workers
+queue locally instead of exhausting Supabase slots), short idle-pool pruning via
+`Database:ConnectionIdleLifetimeSeconds`/`Database:ConnectionPruningIntervalSeconds`, optional
+`Database:MinPoolSize`, and enables
 `EnableRetryOnFailure` for transient Postgres faults. Background subscribers that touch the DB at
 startup (e.g. `BinanceKlineStreamingService`) additionally wrap their initial load in their own
 retry-with-backoff loop rather than crashing the host if the DB is briefly unreachable.
