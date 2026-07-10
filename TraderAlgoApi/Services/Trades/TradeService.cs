@@ -174,25 +174,32 @@ public sealed class TradeService(
 
         // Flip Active→Closed and apply the account PnL atomically. The UPDATE is guarded on the row
         // still being Active, so if a tick-trigger close (EvaluatePriceAsync) races this one only a
-        // single writer wins and the realized PnL is applied exactly once.
-        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        // single writer wins and the realized PnL is applied exactly once. The retrying execution
+        // strategy forbids a bare user transaction, so the unit runs inside
+        // CreateExecutionStrategy().ExecuteAsync to be retried atomically.
+        await dbContext.Database
+            .CreateExecutionStrategy()
+            .ExecuteAsync(async ct =>
+            {
+                await using var transaction = await dbContext.Database.BeginTransactionAsync(ct);
 
-        var closed = await dbContext.Trades
-            .Where(t => t.Id == id && t.StatusId == (int)TradeStatus.Active)
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(t => t.StatusId, (int)TradeStatus.Closed)
-                .SetProperty(t => t.ClosedAt, now)
-                .SetProperty(t => t.ClosedPrice, price)
-                .SetProperty(t => t.CloseReasonId, (int)closeReason)
-                .SetProperty(t => t.Pnl, pnl),
-                cancellationToken);
+                var closed = await dbContext.Trades
+                    .Where(t => t.Id == id && t.StatusId == (int)TradeStatus.Active)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(t => t.StatusId, (int)TradeStatus.Closed)
+                        .SetProperty(t => t.ClosedAt, now)
+                        .SetProperty(t => t.ClosedPrice, price)
+                        .SetProperty(t => t.CloseReasonId, (int)closeReason)
+                        .SetProperty(t => t.Pnl, pnl),
+                        ct);
 
-        if (closed == 0)
-            throw new InvalidOperationException(
-                $"Trade {id} cannot be stopped: it is no longer active.");
+                if (closed == 0)
+                    throw new InvalidOperationException(
+                        $"Trade {id} cannot be stopped: it is no longer active.");
 
-        await ApplyPnlToAccountAsync(trade.TradingAccountId, pnl, cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
+                await ApplyPnlToAccountAsync(trade.TradingAccountId, pnl, ct);
+                await transaction.CommitAsync(ct);
+            }, cancellationToken);
 
         // Mirror the persisted transition onto the in-memory copy for the response DTO / event.
         trade.StatusId      = (int)TradeStatus.Closed;
@@ -335,29 +342,38 @@ public sealed class TradeService(
                     continue;
 
                 // Guarded Active→Closed transition + atomic account PnL. If a manual close or another
-                // tick already closed this trade, the UPDATE matches no row and we apply no PnL.
-                await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+                // tick already closed this trade, the UPDATE matches no row and we apply no PnL. The
+                // retrying execution strategy forbids a bare user transaction, so the unit runs inside
+                // CreateExecutionStrategy().ExecuteAsync to be retried atomically.
+                var didClose = await dbContext.Database
+                    .CreateExecutionStrategy()
+                    .ExecuteAsync(async ct =>
+                    {
+                        await using var transaction = await dbContext.Database.BeginTransactionAsync(ct);
 
-                var closed = await dbContext.Trades
-                    .Where(t => t.Id == trade.Id && t.StatusId == (int)TradeStatus.Active)
-                    .ExecuteUpdateAsync(s => s
-                        .SetProperty(t => t.StatusId, (int)TradeStatus.Closed)
-                        .SetProperty(t => t.ClosedAt, trade.ClosedAt)
-                        .SetProperty(t => t.ClosedPrice, trade.ClosedPrice)
-                        .SetProperty(t => t.CloseReasonId, trade.CloseReasonId)
-                        .SetProperty(t => t.Pnl, trade.Pnl),
-                        cancellationToken);
+                        var closed = await dbContext.Trades
+                            .Where(t => t.Id == trade.Id && t.StatusId == (int)TradeStatus.Active)
+                            .ExecuteUpdateAsync(s => s
+                                .SetProperty(t => t.StatusId, (int)TradeStatus.Closed)
+                                .SetProperty(t => t.ClosedAt, trade.ClosedAt)
+                                .SetProperty(t => t.ClosedPrice, trade.ClosedPrice)
+                                .SetProperty(t => t.CloseReasonId, trade.CloseReasonId)
+                                .SetProperty(t => t.Pnl, trade.Pnl),
+                                ct);
 
-                if (closed > 0)
-                {
-                    await ApplyPnlToAccountAsync(trade.TradingAccountId, trade.Pnl, cancellationToken);
-                    await transaction.CommitAsync(cancellationToken);
+                        if (closed > 0)
+                        {
+                            await ApplyPnlToAccountAsync(trade.TradingAccountId, trade.Pnl, ct);
+                            await transaction.CommitAsync(ct);
+                            return true;
+                        }
+
+                        await transaction.RollbackAsync(ct);
+                        return false;
+                    }, cancellationToken);
+
+                if (didClose)
                     tradeEvents.Add((trade.Id, "TradeClosed", "Trade closed by price trigger."));
-                }
-                else
-                {
-                    await transaction.RollbackAsync(cancellationToken);
-                }
             }
         }
 

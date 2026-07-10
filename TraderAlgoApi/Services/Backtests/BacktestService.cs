@@ -56,56 +56,64 @@ public sealed class BacktestService(
         var now = timeProvider.GetUtcNow();
 
         // Backtest + its template TradeBot are created as a unit — wrap them in a transaction so a
-        // failure between the saves can't leave a backtest without its bot (or vice versa).
-        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        // failure between the saves can't leave a backtest without its bot (or vice versa). The
+        // retrying execution strategy (EnableRetryOnFailure) forbids a bare user transaction, so the
+        // whole unit runs inside CreateExecutionStrategy().ExecuteAsync so it can be retried atomically.
+        var (backtest, tradeBot) = await dbContext.Database
+            .CreateExecutionStrategy()
+            .ExecuteAsync(async ct =>
+            {
+                await using var transaction = await dbContext.Database.BeginTransactionAsync(ct);
 
-        var backtest = new Backtest
-        {
-            SymbolId   = symbol.Id,
-            IntervalId = interval.Id,
-            From       = request.From,
-            To                = request.To,
-            StartedAt         = now,
-            StatusId          = (int)BacktestStatus.Pending,
-            InitialBalance    = request.InitialBalance,
-            CandleCount       = 0
-        };
+                var backtest = new Backtest
+                {
+                    SymbolId   = symbol.Id,
+                    IntervalId = interval.Id,
+                    From       = request.From,
+                    To                = request.To,
+                    StartedAt         = now,
+                    StatusId          = (int)BacktestStatus.Pending,
+                    InitialBalance    = request.InitialBalance,
+                    CandleCount       = 0
+                };
 
-        dbContext.Backtests.Add(backtest);
-        await dbContext.SaveChangesAsync(cancellationToken);
+                dbContext.Backtests.Add(backtest);
+                await dbContext.SaveChangesAsync(ct);
 
-        var tradeBot = new TradeBot
-        {
-            BacktestId         = backtest.Id,
-            TradingStrategyId  = tradingStrategyId,
-            MlPolicyId         = mlPolicy?.Id,
-            SymbolId           = symbol.Id,
-            IntervalId         = interval.Id,
-            IsEnabled          = true,
-            Quantity           = quantity,
-            StopLoss           = stopLoss,
-            TakeProfit         = takeProfit,
-            Breakeven          = breakeven,
-            BreakevenStop      = breakevenStop,
-            Fee                = fee,
-            IsNySessionOnly    = request.IsNySessionOnly,
-            DailyProfitGoal    = dailyProfitGoal,
-            MaxLossesPerDay    = request.MaxLossesPerDay,
-            MaxCandlesPerTrade = maxCandlesPerTrade,
-            CreatedAt          = now,
-            UpdatedAt          = now
-        };
+                var tradeBot = new TradeBot
+                {
+                    BacktestId         = backtest.Id,
+                    TradingStrategyId  = tradingStrategyId,
+                    MlPolicyId         = mlPolicy?.Id,
+                    SymbolId           = symbol.Id,
+                    IntervalId         = interval.Id,
+                    IsEnabled          = true,
+                    Quantity           = quantity,
+                    StopLoss           = stopLoss,
+                    TakeProfit         = takeProfit,
+                    Breakeven          = breakeven,
+                    BreakevenStop      = breakevenStop,
+                    Fee                = fee,
+                    IsNySessionOnly    = request.IsNySessionOnly,
+                    DailyProfitGoal    = dailyProfitGoal,
+                    MaxLossesPerDay    = request.MaxLossesPerDay,
+                    MaxCandlesPerTrade = maxCandlesPerTrade,
+                    CreatedAt          = now,
+                    UpdatedAt          = now
+                };
 
-        dbContext.TradeBots.Add(tradeBot);
-        await dbContext.SaveChangesAsync(cancellationToken);
+                dbContext.TradeBots.Add(tradeBot);
+                await dbContext.SaveChangesAsync(ct);
 
-        backtest.TradeBotId = tradeBot.Id;
-        backtest.TradeBot = tradeBot;
-        tradeBot.TradingStrategy = strategy;
-        tradeBot.MlPolicy = mlPolicy;
-        await dbContext.SaveChangesAsync(cancellationToken);
+                backtest.TradeBotId = tradeBot.Id;
+                backtest.TradeBot = tradeBot;
+                tradeBot.TradingStrategy = strategy;
+                tradeBot.MlPolicy = mlPolicy;
+                await dbContext.SaveChangesAsync(ct);
 
-        await transaction.CommitAsync(cancellationToken);
+                await transaction.CommitAsync(ct);
+                return (backtest, tradeBot);
+            }, cancellationToken);
 
         return ToSummaryDto(backtest, symbol.Code, interval.Code, strategy.Name, tradeBot, tradeCount: 0,
             closedTrades: []);
@@ -215,22 +223,28 @@ public sealed class BacktestService(
             throw new KeyNotFoundException($"Backtest {id} not found.");
 
         // Three dependent deletes — run them in one transaction so a mid-sequence failure can't
-        // leave orphaned trades or bots behind.
-        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        // leave orphaned trades or bots behind. The retrying execution strategy forbids a bare user
+        // transaction, so the unit runs inside CreateExecutionStrategy().ExecuteAsync to be retriable.
+        await dbContext.Database
+            .CreateExecutionStrategy()
+            .ExecuteAsync(async ct =>
+            {
+                await using var transaction = await dbContext.Database.BeginTransactionAsync(ct);
 
-        await dbContext.Trades
-            .Where(t => t.BacktestId == id)
-            .ExecuteDeleteAsync(cancellationToken);
+                await dbContext.Trades
+                    .Where(t => t.BacktestId == id)
+                    .ExecuteDeleteAsync(ct);
 
-        await dbContext.TradeBots
-            .Where(b => b.BacktestId == id)
-            .ExecuteDeleteAsync(cancellationToken);
+                await dbContext.TradeBots
+                    .Where(b => b.BacktestId == id)
+                    .ExecuteDeleteAsync(ct);
 
-        await dbContext.Backtests
-            .Where(b => b.Id == id)
-            .ExecuteDeleteAsync(cancellationToken);
+                await dbContext.Backtests
+                    .Where(b => b.Id == id)
+                    .ExecuteDeleteAsync(ct);
 
-        await transaction.CommitAsync(cancellationToken);
+                await transaction.CommitAsync(ct);
+            }, cancellationToken);
     }
 
     // -------------------------------------------------------------------------

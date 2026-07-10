@@ -92,6 +92,16 @@ locally instead of exhausting Supabase slots) with optional `Database:MinPoolSiz
 startup (e.g. `BinanceKlineStreamingService`) additionally wrap their initial load in their own
 retry-with-backoff loop rather than crashing the host if the DB is briefly unreachable.
 
+Because `EnableRetryOnFailure` installs `NpgsqlRetryingExecutionStrategy`, a bare
+`Database.BeginTransactionAsync` throws (`does not support user-initiated transactions`): the
+strategy must own the retry boundary so it can re-run the whole transactional unit on a transient
+fault. **Any multi-statement transaction must run inside
+`dbContext.Database.CreateExecutionStrategy().ExecuteAsync(async ct => { … })`** with the transaction
+opened inside the delegate (see `BacktestService.CreateAsync`/`DeleteAsync`,
+`TradeService.CloseAsync`/`EvaluatePriceAsync`). Construct any change-tracked entities *inside* the
+delegate so a retry doesn't double-save stale ones; the guarded `ExecuteUpdate`/`ExecuteDelete`
+writes are naturally retry-safe.
+
 **Some tables are written by the ML sidecar, not this app.** The `training_*` telemetry tables
 (`Models/Telemetry/`, mapped in `ApplicationDbContext` and created by a migration so the schema is
 tracked) are **written by the Python `trader-algo-ml` sidecar** — treat them as an external read
