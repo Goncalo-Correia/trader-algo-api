@@ -182,16 +182,18 @@ public sealed class MlController(
     }
 
     [HttpGet("training-runs/{id:long}/decisions")]
-    public async Task<ActionResult<MlTrainingDecisionsResponse>> GetTrainingDecisions(
+    [Produces("application/json")]
+    public async Task<IActionResult> GetTrainingDecisions(
         long id,
         CancellationToken cancellationToken)
     {
         // Served from the training_decisions telemetry table the sidecar writes (no longer
-        // proxied to the Python service).
-        var decisions = await dbContext.GetTrainingDecisionLogAsync(id, cancellationToken);
-        return decisions is null
+        // proxied to the Python service). Return the stored JSON directly; some logs are tens of
+        // megabytes, so materializing the whole DTO just to serialize it again is wasteful.
+        var payload = await dbContext.GetTrainingDecisionLogPayloadAsync(id, cancellationToken);
+        return payload is null
             ? NotFound($"No training decision log for run {id}.")
-            : Ok(decisions);
+            : Content(payload, "application/json");
     }
 
     [HttpDelete("training-runs/{id:long}")]

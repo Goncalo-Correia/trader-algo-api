@@ -26,15 +26,29 @@ public static class TrainingDecisionsQueryExtensions
         long trainingRunId,
         CancellationToken cancellationToken = default)
     {
-        var key = trainingRunId.ToString();
-        var payload = await dbContext.TrainingDecisionLogs
-            .AsNoTracking()
-            .Where(r => r.RunId == key)
-            .Select(r => r.Payload)
-            .FirstOrDefaultAsync(cancellationToken);
+        var payload = await dbContext.GetTrainingDecisionLogPayloadAsync(
+            trainingRunId,
+            cancellationToken);
 
         return payload is null
             ? null
             : JsonSerializer.Deserialize<MlTrainingDecisionsResponse>(payload, JsonOptions);
+    }
+
+    /// <summary>
+    /// Returns the stored decision-log JSON exactly as persisted. The REST endpoint can stream this
+    /// payload directly instead of allocating a large object graph only to serialize it again.
+    /// </summary>
+    public static async Task<string?> GetTrainingDecisionLogPayloadAsync(
+        this ApplicationDbContext dbContext,
+        long trainingRunId,
+        CancellationToken cancellationToken = default)
+    {
+        var key = trainingRunId.ToString();
+        return await dbContext.TrainingDecisionLogs
+            .AsNoTracking()
+            .Where(r => r.RunId == key)
+            .Select(r => r.Payload)
+            .FirstOrDefaultAsync(cancellationToken);
     }
 }

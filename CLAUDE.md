@@ -96,10 +96,13 @@ retry-with-backoff loop rather than crashing the host if the DB is briefly unrea
 (`Models/Telemetry/`, mapped in `ApplicationDbContext` and created by a migration so the schema is
 tracked) are **written by the Python `trader-algo-ml` sidecar** — treat them as an external read
 model and don't add telemetry-producing write paths from this app. This app only **reads** them
-(e.g. `MlPerformanceController` under `/api/ml`; `training_decisions` is served via
-`GetTrainingDecisionLogAsync` in [Data/TrainingDecisionsQueryExtensions.cs](TraderAlgoApi/Data/TrainingDecisionsQueryExtensions.cs)
-instead of proxying the sidecar) and **deletes** rows as cleanup when a training run is removed
-(`MlController` DELETE `training-runs/{id}`).
+(e.g. `MlPerformanceController` under `/api/ml`; `training_decisions` is served from
+[Data/TrainingDecisionsQueryExtensions.cs](TraderAlgoApi/Data/TrainingDecisionsQueryExtensions.cs)
+instead of proxying the sidecar — the REST endpoint `GET /api/ml/training-runs/{id}/decisions`
+streams the stored JSON verbatim via `GetTrainingDecisionLogPayloadAsync` (these logs can be tens
+of MB, so it skips the DTO round-trip), while `GetTrainingDecisionLogAsync` still deserializes the
+same payload for the WebSocket replay) and **deletes** rows as cleanup when a training run is
+removed (`MlController` DELETE `training-runs/{id}`).
 
 **`MlPolicy` columns are not all sent to `/train`.** The `/train` request
 ([Dtos/Ml/MlTrainRequest.cs](TraderAlgoApi/Dtos/Ml/MlTrainRequest.cs), built by
