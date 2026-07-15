@@ -130,10 +130,13 @@ no longer writes them, and `TradeBotService.ApplyPolicyRisk` no longer copies th
 (it sets `Quantity = 0`, `Breakeven`/`BreakevenStop = null`). The columns stay mapped on
 [MlPolicy.cs](TraderAlgoApi/Models/MlPolicy.cs) only so the live-DB schema is undisturbed (dropping
 them would be a destructive migration); nothing reads them. `riskPerTrade` is `decimal?` on the
-policy but **required** on the wire, so `BuildTrainRequest` maps null → `0` (the sidecar's "no risk
-override" sentinel); a bound ML bot left without `riskPerTrade` sizes to `0` (no position). Keep the
-DTO in lockstep with the sidecar's train contract; don't assume a new policy column is forwarded to
-training unless you add it to `MlTrainRequest`.
+policy and **optional** on the wire (`MlTrainRequest.RiskPerTrade` is `decimal?`), so
+`BuildTrainRequest` forwards it as-is: an unset policy sends `null` (not `0`), which lets the
+sidecar's `RISK_PER_TRADE` env fallback take effect — the sidecar rejects `risk_per_trade <= 0`, so
+"unset" must stay `null`/omitted rather than being coerced to `0`. A bound ML bot left without
+`riskPerTrade` still sizes to `0` (no position) in live execution. Keep the DTO in lockstep with the
+sidecar's train contract; don't assume a new policy column is forwarded to training unless you add it
+to `MlTrainRequest`.
 
 `validationScheme` is deliberately a plain **lowercase string** (`single`/`block`/`sliding`), not a
 C# enum: the global `JsonStringEnumConverter` has no naming policy, so an enum would serialize
