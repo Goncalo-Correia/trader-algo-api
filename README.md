@@ -265,7 +265,8 @@ Key fields: `tradingStrategyId`, `mlPolicyId` (required when the strategy is **M
 When `tradingStrategyId` is **ML Policy** the bot must reference an `mlPolicyId`: the policy's
 symbol/interval must match the bot's, and its risk settings (fee, daily-profit goal,
 max-candles-per-trade) are copied onto the bot. Quantity, breakeven/breakevenStop, and
-stop-loss/take-profit are **not** copied — ML sizing is `riskPerTrade`-only (volatility-targeted), ML
+stop-loss/take-profit are **not** copied — ML sizing and brackets come from the sidecar's `/decide`
+response (regime-selected `quantity` when present, else `riskPerTrade / stop`), ML
 bots run no breakeven ratchet, and the model chooses the ATR-sized SL/TP bracket at entry (so the bot
 is bound with `quantity = 0`, `breakeven`/`breakevenStop` = null, SL/TP unset). The entry signal then
 comes from the ML sidecar instead of an indicator rule. Any other strategy rejects an `mlPolicyId`.
@@ -360,9 +361,9 @@ erDiagram
 
 - **`ml_policies`** — a reusable config: symbol/interval + the risk/environment parameters forwarded
   to the `/train` endpoint (`totalTimesteps`, `initialBalance`, `maxCandlesPerTrade`, `dailyProfit`,
-  `dailyDrawdownLimit`, `slippage`, `fee`, `riskPerTrade`, `validationScheme`). Position sizing is
-  driven **solely** by `riskPerTrade` (volatility-targeted, see below) and the stop-loss/take-profit
-  brackets are chosen by the model at entry, so a policy has no `quantity`, `breakeven`/`breakevenStop`,
+  `dailyDrawdownLimit`, `slippage`, `fee`, `riskPerTrade`, `validationScheme`). Position sizing and the
+  stop-loss/take-profit brackets are **decided by the sidecar per candle** and returned on `/decide`
+  (see below), so a policy has no `quantity`, `breakeven`/`breakevenStop`,
   or `stopLoss`/`takeProfit`/`maxTrailingDrawdown` fields (the legacy `quantity`/`breakeven`/
   `breakevenStop` columns remain on the table for schema compatibility but are unused). Live trade
   bots and backtests running the ML Policy strategy reference a policy by id (`mlPolicyId`); the
@@ -442,14 +443,19 @@ it only ever saw as `Running`. `Failed` is terminal and the run can simply be re
 with backtests — not fractions. `fee` is a flat cash fee per round-trip. `slippage` is an **ATR
 fraction**: the per-fill price offset is `slippage × ATR_at_entry` (applied on both entry and exit
 fills in the backtest/training env), not a fixed price offset. The stop-loss and take-profit brackets
-are **chosen by the model at entry** (an ATR-sized SL bracket plus an R-multiple TP bracket), so they
+are **decided by the sidecar** (an ATR-sized SL bracket plus an R-multiple TP bracket), so they
 are not policy config — the former `stopLoss`, `takeProfit`, and `maxTrailingDrawdown` policy fields
-have been removed, and ML bots run **no breakeven ratchet**. `riskPerTrade` is the **sole ML sizing
-input** — an absolute cash amount for **volatility-targeted sizing**: the position size is
-`riskPerTrade / stop_distance` (where `stop_distance = sl_atr_mult × ATR_at_entry`, the model-chosen
-SL bracket). It is always sent to the `/train` request (a null policy value is forwarded as `0`, the
-sidecar's "no risk override" sentinel); at inference a policy left without `riskPerTrade` sizes to
-`0` (no position), so a bound ML bot must set it.
+have been removed, and ML bots run **no breakeven ratchet**. `riskPerTrade` is the **primary ML sizing
+input** — an absolute cash amount. In the production **ATR-regime** path (a policy trained with
+`riskPerTrade`) the sidecar picks the order size from the entry ATR's volatility regime and returns it
+on `/decide` as `quantity`, which the engine applies **verbatim**; the stop is a fixed price distance
+of `riskPerTrade` (the sidecar returns `sl_atr_mult = riskPerTrade / ATR_at_entry` so
+`stop_distance = sl_atr_mult × ATR_at_entry` reproduces it). When `/decide` returns no `quantity`
+(legacy menu mode), the engine falls back to **volatility-targeted sizing**:
+`riskPerTrade / stop_distance`. `riskPerTrade` is `decimal?` and **optional** on the `/train` request
+— an unset policy is forwarded as `null`/omitted (the sidecar rejects `risk_per_trade <= 0`, so it is
+never coerced to `0`), letting the sidecar's `RISK_PER_TRADE` env fallback apply; but at inference a
+bound ML bot left without `riskPerTrade` sizes to `0` (no position), so it must set it.
 
 **Decision replay.** `WS /ws/ml/training?trainingRunId={id}` streams the run's candles (from the
 database) zipped with the model's per-candle decisions — emitting `candle` and `mlDecision` frames —
@@ -492,7 +498,11 @@ the frontend can render per-run analytics dashboards. The DB `run_id` is text bu
 **Inference.** `POST /api/ml/decide` fetches the latest candle+indicators and asks the sidecar for an
 entry action — this is what the live `MlPolicy` strategy and ML backtests call while flat. The
 decision is made on a **closed candle**; the live path enters at that candle's **close** to match the
-training environment.
+training environment. The response carries the entry bracket (`sl_atr_mult`, `tp_r_mult`) plus an
+optional `quantity`: in ATR-regime mode it is the regime-selected order size (applied verbatim,
+`number`), and it is `null` in legacy menu mode (the engine then sizes from `riskPerTrade / stop`).
+In regime mode `sl_bracket`/`tp_bracket` are `null` — only the resolved multiples and `quantity`
+matter.
 
 > **Unit contract (train/serve parity).** The decide payload must use the same units the training
 > environment uses, otherwise the sidecar logs a skew warning and inference degrades:

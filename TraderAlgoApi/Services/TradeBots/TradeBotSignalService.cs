@@ -210,7 +210,7 @@ public sealed class TradeBotSignalService(
                 policy.Id);
             return new TradeBotSignalResult(TradeBotSignal.None, "ML entry missing ATR (treated as hold).");
         }
-        var bracket = new MlBracket(slAtrMult, tpRMult, atrAtEntry);
+        var bracket = new MlBracket(slAtrMult, tpRMult, atrAtEntry, response.Quantity);
         var signal = response.Action == MlActionEnterLong ? TradeBotSignal.EnterLong : TradeBotSignal.EnterShort;
         var direction = response.Action == MlActionEnterLong ? "long" : "short";
 

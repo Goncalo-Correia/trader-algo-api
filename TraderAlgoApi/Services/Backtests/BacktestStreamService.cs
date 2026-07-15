@@ -372,6 +372,7 @@ public sealed class BacktestStreamService(
             {
                 TradeSide? side = null;
                 decimal slAtrMult = 0m, tpRMult = 0m;
+                decimal? mlDecideQuantity = null;
 
                 if (rule is not null)
                 {
@@ -400,6 +401,7 @@ public sealed class BacktestStreamService(
                         side = decision.Side;
                         slAtrMult = decision.SlAtrMult;
                         tpRMult = decision.TpRMult;
+                        mlDecideQuantity = decision.Quantity;
                     }
                 }
 
@@ -419,8 +421,9 @@ public sealed class BacktestStreamService(
                         atrAtEntry = atr;
                         stopLoss   = slDistance;
                         takeProfit = tpDistance;
-                        // Volatility-targeted sizing when the policy sets risk-per-trade; else fixed quantity.
-                        quantity   = BacktestSimulationEngine.MlPositionSize(bot.Quantity, bot.MlPolicy!.RiskPerTrade, slDistance);
+                        // ATR-regime decide-quantity wins verbatim; else volatility-targeted sizing when
+                        // the policy sets risk-per-trade; else fixed quantity.
+                        quantity   = BacktestSimulationEngine.MlPositionSize(bot.Quantity, bot.MlPolicy!.RiskPerTrade, slDistance, mlDecideQuantity);
                         entryPrice = BacktestSimulationEngine.MlEntryFillPrice(current.Close, side.Value, slippageRate, atr);
                     }
                     else
@@ -651,7 +654,8 @@ public sealed class BacktestStreamService(
     }
 
     // An ML entry decision: direction plus the chosen SL/TP bracket multipliers used to size the trade.
-    private sealed record MlDecision(TradeSide Side, decimal SlAtrMult, decimal TpRMult);
+    // Quantity is the sidecar's regime-selected order size (ATR-regime mode); non-null → use verbatim.
+    private sealed record MlDecision(TradeSide Side, decimal SlAtrMult, decimal TpRMult, decimal? Quantity);
 
     private async Task<MlDecision?> DecideViaMlAsync(
         Backtest backtest,
@@ -746,7 +750,7 @@ public sealed class BacktestStreamService(
             return null;
         }
 
-        return new MlDecision(side.Value, slAtrMult, tpRMult);
+        return new MlDecision(side.Value, slAtrMult, tpRMult, response.Quantity);
     }
 
     private ITradingRule? SelectRule(int strategyId) => (TradingStrategy)strategyId switch

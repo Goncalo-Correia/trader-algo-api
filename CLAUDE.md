@@ -121,8 +121,12 @@ removed (`MlController` DELETE `training-runs/{id}`).
 `MlController.BuildTrainRequest`) is a strict subset of the policy: symbol/interval + the
 high-level `validationScheme` (forwarded as `validation_scheme`; see below) + the
 risk/environment params (`totalTimesteps`, `initialBalance`, `maxCandlesPerTrade`, `dailyProfit`,
-`dailyDrawdownLimit`, `slippage`, `fee`, `riskPerTrade`). ML **sizing is `riskPerTrade`-only**
-(volatility-targeted; `BacktestSimulationEngine.MlPositionSize`) and ML bots run **no breakeven
+`dailyDrawdownLimit`, `slippage`, `fee`, `riskPerTrade`). ML **sizing is sidecar-driven**
+(`BacktestSimulationEngine.MlPositionSize`): the `/decide` response's optional `quantity` — the
+sidecar's regime-selected size in ATR-regime mode (policies trained with `risk_per_trade`) — wins
+verbatim when present; otherwise it falls back to `riskPerTrade`-only volatility targeting
+(`riskPerTrade / stopDistance`), then to the bot's fixed quantity. See the "`/decide` `quantity`"
+note below. ML bots run **no breakeven
 ratchet**, so the legacy `quantity`/`breakeven`/`breakevenStop` columns are **retired**: they're not
 in the policy API DTOs ([MlPolicyDtos.cs](TraderAlgoApi/Dtos/Ml/MlPolicyDtos.cs)) or the `/decide`
 request ([MlDecideRequest.cs](TraderAlgoApi/Dtos/Ml/MlDecideRequest.cs)), `MlPoliciesController.Apply`
@@ -147,6 +151,22 @@ validates create/update (invalid → 400) and persists the normalized value, and
 re-normalizes on the way out so even legacy rows send a valid scheme. Only the high-level choice is
 modelled — fold counts, window sizes, embargo bars, and promotion thresholds stay engine-owned in
 Python; don't add columns/DTO fields for them.
+
+**The `/decide` response's `quantity` drives ATR-regime sizing (both modes).** In ATR-regime mode
+(policies trained with `risk_per_trade`) the sidecar picks the stop/TP/size from the entry ATR's
+volatility regime and returns the chosen order size as `quantity`
+([MlDecideResponse.cs](TraderAlgoApi/Dtos/Ml/MlDecideResponse.cs), wire `quantity`, `decimal?`). The
+stop/TP formulas are unchanged — the engine still computes `stop = slAtrMult × ATR-at-entry` and
+`tp = tpRMult × stop`; in regime mode the sidecar sets `sl_bracket`/`tp_bracket` to `null` and returns
+`sl_atr_mult = risk_per_trade / ATR` so `slAtrMult × ATR` reproduces the fixed `risk_per_trade` stop.
+`MlPositionSize(fallbackQuantity, riskPerTrade, stopDistance, decideQuantity)` applies `decideQuantity`
+verbatim when non-null (it must **not** be re-derived from `riskPerTrade / stop`, which would ignore
+the regime downsizing), else the legacy `risk/stop` volatility target, else the fixed fallback. Both
+the live monitor (`TradeBotSignalService` carries it on `MlBracket` → `TradeBotMonitorService`) and the
+backtest (`BacktestStreamService` carries it on `MlDecision`) call `/decide` per candle and thread the
+field through the same method, so the two modes size identically. Legacy menu-mode policies return
+`quantity = null` and keep the old sizing. The regime thresholds/quantities/TP-multiples are
+model-internal (ML-side env), **not** on the `/train` wire.
 
 **Enum ↔ lookup-table dual representation (important).** Every lookup (TradeSide, TradeStatus,
 TradingStrategy, SyncJobType, etc.) exists as both:

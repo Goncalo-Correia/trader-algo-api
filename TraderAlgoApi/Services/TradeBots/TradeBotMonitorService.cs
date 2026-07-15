@@ -197,10 +197,11 @@ public sealed class TradeBotMonitorService(
             stopLoss = slDistance;
             takeProfit = tpDistance;
             atrAtEntry = bracket.AtrAtEntry;
-            // Volatility-targeted sizing from the policy's risk-per-trade (the sole ML sizing input;
-            // the bound bot carries no fixed quantity, so a policy without risk-per-trade sizes to 0).
+            // ATR-regime policies return an explicit regime-selected quantity, applied verbatim; legacy
+            // policies fall back to volatility-targeted sizing from the policy's risk-per-trade (the
+            // bound bot carries no fixed quantity, so a policy without risk-per-trade sizes to 0).
             quantity = BacktestSimulationEngine.MlPositionSize(
-                tradeBot.Quantity, tradeBot.MlPolicy?.RiskPerTrade, slDistance);
+                tradeBot.Quantity, tradeBot.MlPolicy?.RiskPerTrade, slDistance, bracket.Quantity);
         }
 
         try

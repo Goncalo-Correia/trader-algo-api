@@ -147,16 +147,22 @@ public static class BacktestSimulationEngine
     }
 
     /// <summary>
-    /// ML position size. When <paramref name="riskPerTrade"/> is set (&gt; 0), size volatility-targeted:
-    /// quantity = riskPerTrade / stopDistance (the cash risked at the model-chosen SL bracket, where
-    /// stopDistance = slAtrMult × ATR-at-entry). Otherwise fall back to <paramref name="fallbackQuantity"/>.
-    /// A non-positive stop distance (indicator warmup) also falls back so a size can always be produced.
-    /// ML-specific — the indicator strategies never call this.
+    /// ML position size. When the sidecar returns an explicit <paramref name="decideQuantity"/>
+    /// (ATR-regime mode — policy trained with risk_per_trade), that regime-selected size wins verbatim;
+    /// it must NOT be re-derived from riskPerTrade / stop (which would always yield ~1 and ignore the
+    /// regime downsizing). Otherwise, when <paramref name="riskPerTrade"/> is set (&gt; 0), size
+    /// volatility-targeted: quantity = riskPerTrade / stopDistance (the cash risked at the model-chosen
+    /// SL bracket, where stopDistance = slAtrMult × ATR-at-entry). Otherwise fall back to
+    /// <paramref name="fallbackQuantity"/>. A non-positive stop distance (indicator warmup) also falls
+    /// back so a size can always be produced. ML-specific — the indicator strategies never call this.
     /// </summary>
-    public static decimal MlPositionSize(decimal fallbackQuantity, decimal? riskPerTrade, decimal stopDistance) =>
-        riskPerTrade is decimal risk && risk > 0m && stopDistance > 0m
-            ? risk / stopDistance
-            : fallbackQuantity;
+    public static decimal MlPositionSize(
+        decimal fallbackQuantity, decimal? riskPerTrade, decimal stopDistance, decimal? decideQuantity = null) =>
+        decideQuantity is decimal q
+            ? q
+            : riskPerTrade is decimal risk && risk > 0m && stopDistance > 0m
+                ? risk / stopDistance
+                : fallbackQuantity;
 
     /// <summary>
     /// Entry fills at candle close ± (slippageRate × ATR-at-entry) (long +, short −), matching the env's
