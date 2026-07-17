@@ -16,7 +16,7 @@ public sealed record MlPolicyRequest(
     [property: JsonPropertyName("maxCandlesPerTrade")]  int MaxCandlesPerTrade,
     // Optional cash risked at the stop for volatility-targeted ML sizing (forwarded as risk_per_trade).
     [property: JsonPropertyName("riskPerTrade")]        decimal? RiskPerTrade = null,
-    // Optional high-level validation scheme (single|block|sliding); null/blank normalizes to "single".
+    // Optional high-level validation scheme (single|block); null/blank normalizes to "single".
     [property: JsonPropertyName("validationScheme")]    string? ValidationScheme = null);
 
 public sealed record MlPolicyResponse(

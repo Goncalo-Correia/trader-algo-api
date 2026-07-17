@@ -131,9 +131,11 @@ ratchet**, so the legacy `quantity`/`breakeven`/`breakevenStop` columns are **re
 in the policy API DTOs ([MlPolicyDtos.cs](TraderAlgoApi/Dtos/Ml/MlPolicyDtos.cs)) or the `/decide`
 request ([MlDecideRequest.cs](TraderAlgoApi/Dtos/Ml/MlDecideRequest.cs)), `MlPoliciesController.Apply`
 no longer writes them, and `TradeBotService.ApplyPolicyRisk` no longer copies them to the bound bot
-(it sets `Quantity = 0`, `Breakeven`/`BreakevenStop = null`). The columns stay mapped on
-[MlPolicy.cs](TraderAlgoApi/Models/MlPolicy.cs) only so the live-DB schema is undisturbed (dropping
-them would be a destructive migration); nothing reads them. `riskPerTrade` is `decimal?` on the
+(it sets `Quantity = 0`, `Breakeven`/`BreakevenStop = null`). These three columns have now been
+**dropped** from `ml_policies` (migration `DropMlPolicyRetiredQuantityBreakevenColumns`) and removed
+from [MlPolicy.cs](TraderAlgoApi/Models/MlPolicy.cs) — the `ml_policies` table was emptied first, so
+the drop lost no data. (The `Quantity`/`Breakeven`/`BreakevenStop` columns on `trade_bots` are
+unrelated and remain.) `riskPerTrade` is `decimal?` on the
 policy and **optional** on the wire (`MlTrainRequest.RiskPerTrade` is `decimal?`), so
 `BuildTrainRequest` forwards it as-is: an unset policy sends `null` (not `0`), which lets the
 sidecar's `RISK_PER_TRADE` env fallback take effect — the sidecar rejects `risk_per_trade <= 0`, so
@@ -142,10 +144,10 @@ sidecar's `RISK_PER_TRADE` env fallback take effect — the sidecar rejects `ris
 sidecar's train contract; don't assume a new policy column is forwarded to training unless you add it
 to `MlTrainRequest`.
 
-`validationScheme` is deliberately a plain **lowercase string** (`single`/`block`/`sliding`), not a
+`validationScheme` is deliberately a plain **lowercase string** (`single`/`block`), not a
 C# enum: the global `JsonStringEnumConverter` has no naming policy, so an enum would serialize
 PascalCase and break the sidecar's `validation_scheme` contract. The allow-list, normalization
-(null/blank → `single`, trim+lowercase), and `IsValid` live in
+(null/blank → `single`, trim+lowercase, retired `sliding` → `block`), and `IsValid` live in
 [Models/ValidationSchemes.cs](TraderAlgoApi/Models/ValidationSchemes.cs); `MlPoliciesController`
 validates create/update (invalid → 400) and persists the normalized value, and `BuildTrainRequest`
 re-normalizes on the way out so even legacy rows send a valid scheme. Only the high-level choice is

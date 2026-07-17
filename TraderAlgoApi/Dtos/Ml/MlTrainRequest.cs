@@ -22,6 +22,6 @@ public sealed record MlTrainRequest(
     // Cash risked at the stop. The ML position size is risk_per_trade / stop_distance
     // (stop_distance = sl_atr_mult × ATR-at-entry), giving volatility-targeted sizing.
     [property: JsonPropertyName("risk_per_trade")] decimal? RiskPerTrade,
-    // High-level validation scheme: one of the lowercase strings "single", "block", "sliding".
+    // High-level validation scheme: one of the lowercase strings "single", "block".
     // Detailed fold/window knobs are engine-owned defaults in the sidecar, not part of this contract.
     [property: JsonPropertyName("validation_scheme")] string ValidationScheme);

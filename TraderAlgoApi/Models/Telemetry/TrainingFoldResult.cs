@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace TraderAlgoApi.Models.Telemetry;
 
-/// <summary>Per-fold walk-forward result (block/sliding schemes).</summary>
+/// <summary>Per-fold walk-forward result (block scheme).</summary>
 [Table("training_fold_results")]
 public sealed class TrainingFoldResult
 {

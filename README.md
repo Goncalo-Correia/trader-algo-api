@@ -369,11 +369,12 @@ erDiagram
   bots and backtests running the ML Policy strategy reference a policy by id (`mlPolicyId`); the
   policy id is also the model identifier sent to the sidecar.
   - **`validationScheme`** — a high-level choice of how each training run is validated before
-    promotion: `single` (default; one chronological train/out-of-sample split), `block` (walk-forward
-    over equal blocks), or `sliding` (calendar walk-forward simulating periodic retraining). Stored as
-    the exact lowercase string the sidecar accepts and forwarded as `validation_scheme`; fold counts
-    and window sizes remain engine-owned defaults in Python. Create/update reject any other value with
-    a 400, and a null/blank value normalizes to `single`, so older callers are unaffected.
+    promotion: `single` (default; one chronological train/out-of-sample split) or `block` (walk-forward
+    over equal blocks). Stored as the exact lowercase string the sidecar accepts and forwarded as
+    `validation_scheme`; fold counts and window sizes remain engine-owned defaults in Python.
+    Create/update reject any other value with a 400, and a null/blank value normalizes to `single`, so
+    older callers are unaffected. The retired `sliding` scheme is coerced to `block` on normalization,
+    so legacy policies keep training rather than hitting the sidecar's 422.
 - **`ml_training_runs`** — one execution of a policy over a date range (model/symbol/interval/params
   come from the policy); holds only run-specific state: dates, status, and final metrics. Metrics are
   recorded both **in-sample** (`finalBalance`, `pnlPct`) and **out-of-sample** (`finalBalanceOos`,

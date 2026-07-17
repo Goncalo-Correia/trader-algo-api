@@ -136,7 +136,7 @@ public sealed class MlPoliciesController(
         var scheme = ValidationSchemes.Normalize(request.ValidationScheme);
         return ValidationSchemes.IsValid(scheme)
             ? null
-            : $"Unsupported validationScheme '{request.ValidationScheme}'. Allowed values: single, block, sliding.";
+            : $"Unsupported validationScheme '{request.ValidationScheme}'. Allowed values: single, block.";
     }
 
     private static void Apply(MlPolicy policy, MlPolicyRequest r)

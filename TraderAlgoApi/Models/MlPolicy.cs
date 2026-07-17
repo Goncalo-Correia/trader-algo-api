@@ -34,28 +34,6 @@ public sealed class MlPolicy
     [Precision(28, 10)]
     public decimal InitialBalance { get; set; }
 
-    /// <summary>
-    /// Retired: no longer part of the policy API, the train request, or ML execution (sizing is
-    /// <see cref="RiskPerTrade"/>-only). The column is kept mapped so existing rows and the live DB
-    /// schema are undisturbed (dropping it would be a destructive migration); it is never read.
-    /// </summary>
-    [Precision(28, 10)]
-    public decimal Quantity { get; set; }
-
-    /// <summary>
-    /// Retired: ML bots no longer run a breakeven ratchet, so this is no longer part of the policy
-    /// API or execution. Kept mapped only for live-DB schema compatibility; it is never read.
-    /// </summary>
-    [Precision(28, 10)]
-    public decimal Breakeven { get; set; }
-
-    /// <summary>
-    /// Retired: paired with <see cref="Breakeven"/>, which ML bots no longer apply. Kept mapped only
-    /// for live-DB schema compatibility; it is never read.
-    /// </summary>
-    [Precision(28, 10)]
-    public decimal BreakevenStop { get; set; }
-
     [Precision(28, 10)]
     public decimal Fee { get; set; }
 
@@ -84,9 +62,9 @@ public sealed class MlPolicy
 
     /// <summary>
     /// High-level validation scheme forwarded to the ML <c>/train</c> endpoint as
-    /// <c>validation_scheme</c>: <c>single</c> (default), <c>block</c> (block walk-forward), or
-    /// <c>sliding</c> (calendar walk-forward). Persisted as the exact lowercase string the sidecar
-    /// accepts; fold/window knobs remain engine-owned. See <see cref="ValidationSchemes"/>.
+    /// <c>validation_scheme</c>: <c>single</c> (default) or <c>block</c> (block walk-forward).
+    /// Persisted as the exact lowercase string the sidecar accepts; fold/window knobs remain
+    /// engine-owned. Legacy <c>sliding</c> rows normalize to <c>block</c>. See <see cref="ValidationSchemes"/>.
     /// </summary>
     [MaxLength(16)]
     public string ValidationScheme { get; set; } = ValidationSchemes.Single;

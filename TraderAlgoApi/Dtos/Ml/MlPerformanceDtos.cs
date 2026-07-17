@@ -52,7 +52,7 @@ public sealed record CheckpointEvalResponse(
     [property: JsonPropertyName("eligible")]    bool? Eligible,
     [property: JsonPropertyName("isBest")]      bool? IsBest);
 
-/// <summary>Per-fold walk-forward result (block val_* or sliding test_*).</summary>
+/// <summary>Per-fold walk-forward result (block scheme; val_* window, optional held-out test_*).</summary>
 public sealed record FoldResultResponse(
     [property: JsonPropertyName("fold")]          int? Fold,
     [property: JsonPropertyName("scheme")]        string? Scheme,

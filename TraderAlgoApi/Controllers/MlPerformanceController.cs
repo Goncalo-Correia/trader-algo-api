@@ -74,7 +74,7 @@ public sealed class MlPerformanceController(ApplicationDbContext dbContext) : Co
         return Ok(rows);
     }
 
-    /// <summary>Per-fold walk-forward results (block val_* or sliding test_*) + aggregate.</summary>
+    /// <summary>Per-fold walk-forward results (block scheme; val_* window, optional held-out test_*) + aggregate.</summary>
     [HttpGet("training-runs/{runId:long}/folds")]
     public async Task<ActionResult<IReadOnlyList<FoldResultResponse>>> GetFolds(
         long runId,

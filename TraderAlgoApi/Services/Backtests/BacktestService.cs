@@ -33,14 +33,17 @@ public sealed class BacktestService(
         var templateBot = await LoadTemplateBotAsync(request, cancellationToken);
         var tradingStrategyId = request.TradingStrategyId ?? templateBot.TradingStrategyId;
         var mlPolicy = await ResolveMlPolicyAsync(request, templateBot, tradingStrategyId, symbol.Code, interval.Code, cancellationToken);
-        var quantity = mlPolicy?.Quantity ?? request.Quantity ?? templateBot.Quantity;
+        // ML policies no longer carry a fixed quantity or breakeven ratchet (sizing is sidecar-driven,
+        // no breakeven), so those columns are retired: the fallback chain uses the request/template
+        // values regardless of whether an ML policy is bound.
+        var quantity = request.Quantity ?? templateBot.Quantity;
         // ML policies no longer carry fixed stop-loss/take-profit brackets: the model chooses the
         // ATR-sized SL/TP bracket at entry. For ML backtests SL/TP stay unset unless the request
         // supplies them; indicator strategies keep using the request/template values.
         var stopLoss = mlPolicy is not null ? request.StopLoss : request.StopLoss ?? templateBot.StopLoss;
         var takeProfit = mlPolicy is not null ? request.TakeProfit : request.TakeProfit ?? templateBot.TakeProfit;
-        var breakeven = mlPolicy?.Breakeven ?? request.Breakeven;
-        var breakevenStop = mlPolicy?.BreakevenStop ?? request.BreakevenStop;
+        var breakeven = request.Breakeven;
+        var breakevenStop = request.BreakevenStop;
         var fee = mlPolicy?.Fee ?? request.Fee;
         var dailyProfitGoal = mlPolicy?.DailyProfit ?? request.DailyProfitGoal;
         var maxCandlesPerTrade = mlPolicy?.MaxCandlesPerTrade ?? request.MaxCandlesPerTrade;
